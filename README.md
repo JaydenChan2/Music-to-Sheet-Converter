@@ -1,65 +1,104 @@
-# Music to Sheet Converter
+# 🎵 Music to Sheet Converter
 
-A full-stack application to convert audio files into sheet music/tabs.
+> **Transform your audio files into accurate sheet music and guitar tabs in seconds.**
 
-## Structure
+[![React](https://img.shields.io/badge/React-19-blue?logo=react&logoColor=white)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-Fast-purple?logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Flask](https://img.shields.io/badge/Flask-Backend-black?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-yellow?logo=python&logoColor=white)](https://www.python.org/)
 
-- `backend/`: Flask application for audio processing.
-- `frontend/`: React application (Vite) for the user interface.
+A powerful full-stack application that leverages advanced signal processing to analyze audio files (MP3, WAV) and convert them into readable musical notation. Whether you're a musician looking to transcribe a solo or a student studying composition, this tool simplifies the process.
 
-## Prerequisites
+---
 
-- Python 3.8+
-- Node.js 18+
-- npm
+## ✨ Features
 
-## Setup
+- **🚀 Fast Audio Processing**: Upload and process audio files quickly using our optimized backend.
+- **🎸 Guitar Tab Generation**: Automatically generates guitar tablature from audio input.
+- **🎼 Sheet Music Conversion**: (In Development) Convert melodies into standard sheet music notation.
+- **🎨 Modern UI**: Built with a beautiful, responsive interface using React and TailwindCSS.
+- **📤 Export Options**: (Coming Soon) Download your transcriptions as PDF, MIDI, or Text files.
 
-### Backend
+---
 
-1. Navigate to the `backend` directory:
-   ```bash
-   cd backend
-   ```
+## 🛠️ Tech Stack
 
-2. Create a virtual environment:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+### **Frontend**
+- **Framework**: React 19 + Vite
+- **Styling**: TailwindCSS
+- **Icons**: Lucide React
+- **Animations**: Framer Motion
 
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### **Backend**
+- **Framework**: Flask (Python)
+- **Audio Processing**: Librosa, NumPy, SciPy
+- **Server**: Gunicorn (Production ready)
 
-4. Run the server:
-   ```bash
-   python3 app.py
-   ```
-   The backend runs on `http://127.0.0.1:5000`.
+---
 
-### Frontend
+## 🚀 Getting Started
 
-1. Navigate to the `frontend` directory:
-   ```bash
-   cd frontend
-   ```
-   > **Note:** The frontend code is in the root `frontend` directory, not inside `backend/frontend`.
+Follow these steps to set up the project locally.
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+### Prerequisites
 
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
-   The frontend will run on `http://localhost:5173` (by default).
+Ensure you have the following installed:
+- [Python 3.8+](https://www.python.org/downloads/) 🐍
+- [Node.js 18+](https://nodejs.org/) 🟢
+- [npm](https://www.npmjs.com/) 📦
 
-## Usage
+### 1️⃣ Backend Setup
 
-1. Start both the backend and frontend servers requirements.
-2. Open the frontend URL in your browser.
-3. Upload an audio file/generate tabs.
+Navigate to the `backend` directory and install Python dependencies.
+
+```bash
+cd backend
+
+# Create a virtual environment
+python3 -m venv .venv
+
+# Activate the virtual environment
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the server
+python3 app.py
+```
+> The backend will start on `http://127.0.0.1:5000` 🌐
+
+### 2️⃣ Frontend Setup
+
+Open a new terminal, navigate to the `frontend` directory, and start the React app.
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+> The frontend will be available at `http://localhost:5173` 💻
+
+---
+
+## 📖 Usage
+
+1.  **Start Services**: Ensure both backend (`flask run`) and frontend (`npm run dev`) constitute running.
+2.  **Access App**: Open `http://localhost:5173` in your browser.
+3.  **Upload Audio**: Click the upload area to select an MP3 or WAV file.
+4.  **View Results**: Wait for the processing to finish and view your generated tabs!
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please fork the repository and submit a pull request.
+
+## 📄 License
+
+This project is open source and available under the [MIT License](LICENSE).
