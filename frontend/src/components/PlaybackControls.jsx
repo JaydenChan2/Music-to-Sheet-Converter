@@ -9,48 +9,49 @@ const PlaybackControls = ({ isPlaying, onPlayPause, progress, duration, tempo, o
     };
 
     return (
-        <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 border-t border-slate-800 backdrop-blur-xl p-4 z-50">
-            <div className="max-w-4xl mx-auto flex flex-col gap-3">
-                {/* Progress Bar */}
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden cursor-pointer group" onClick={onSeek}>
-                    <div
-                        className="h-full bg-gradient-to-r from-purple-500 to-pink-500 relative transition-all duration-100 ease-linear"
-                        style={{ width: `${(progress / duration) * 100}%` }}
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4">
+            <div className="bg-zinc-900/80 backdrop-blur-xl border border-zinc-800/50 rounded-full px-6 py-3 shadow-2xl flex items-center justify-between gap-6">
+
+                {/* Play/Pause Group */}
+                <div className="flex items-center gap-4">
+                    <button className="text-zinc-400 hover:text-white transition-colors">
+                        <SkipBack size={18} />
+                    </button>
+
+                    <button
+                        onClick={onPlayPause}
+                        className="w-10 h-10 flex items-center justify-center rounded-full bg-white text-black hover:scale-105 active:scale-95 transition-all"
                     >
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+                        {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+                    </button>
+
+                    <button className="text-zinc-400 hover:text-white transition-colors">
+                        <SkipForward size={18} />
+                    </button>
+                </div>
+
+                {/* Progress Group (Simplified) */}
+                <div className="flex-grow flex flex-col gap-1.5">
+                    <div className="relative h-1 bg-zinc-800 rounded-full overflow-hidden cursor-pointer group" onClick={onSeek}>
+                        <div
+                            className="absolute top-0 left-0 h-full bg-zinc-200 transition-all duration-100 ease-linear"
+                            style={{ width: `${(progress / duration || 0) * 100}%` }}
+                        />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-zinc-500 font-medium font-mono">
+                        <span>{formatTime(progress)}</span>
+                        <span>{formatTime(duration)}</span>
                     </div>
                 </div>
 
-                <div className="flex items-center justify-between">
-                    <div className="text-xs text-slate-400 font-medium w-16">
-                        {formatTime(progress)} / {formatTime(duration)}
-                    </div>
-
-                    <div className="flex items-center gap-6">
-                        <button className="text-slate-400 hover:text-white transition-colors">
-                            <SkipBack size={20} />
-                        </button>
-
-                        <button
-                            onClick={onPlayPause}
-                            className="w-12 h-12 flex items-center justify-center rounded-full bg-white text-purple-900 hover:scale-105 active:scale-95 transition-all shadow-lg shadow-purple-500/20"
-                        >
-                            {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
-                        </button>
-
-                        <button className="text-slate-400 hover:text-white transition-colors">
-                            <SkipForward size={20} />
-                        </button>
-                    </div>
-
-                    <div className="flex items-center gap-4 w-16 justify-end">
-                        {tempo && (
-                            <div className="text-xs font-mono text-purple-400 border border-purple-500/30 px-2 py-1 rounded bg-purple-500/5">
-                                {Math.round(tempo)} BPM
-                            </div>
-                        )}
-                        <Volume2 size={18} className="text-slate-400 cursor-pointer hover:text-white" />
-                    </div>
+                {/* Tempo / Volume Group */}
+                <div className="flex items-center gap-3 pl-2 border-l border-zinc-800">
+                    {tempo && (
+                        <div className="text-[10px] font-mono text-zinc-500">
+                            {Math.round(tempo)} BPM
+                        </div>
+                    )}
+                    <Volume2 size={16} className="text-zinc-500 hover:text-zinc-300 cursor-pointer transition-colors" />
                 </div>
             </div>
         </div>
