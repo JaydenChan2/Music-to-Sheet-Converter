@@ -88,7 +88,8 @@ npm run dev
 
 ## 📖 Usage
 
-1.  **Start Services**: Ensure both backend (`flask run`) and frontend (`npm run dev`) constitute running.
+1.  **Start Services**: ensure the backend is running via `python3 app.py` and the frontend via `npm run dev`.
+    > **Tip:** Visit `http://127.0.0.1:5000` to confirm the backend is running.
 2.  **Access App**: Open `http://localhost:5173` in your browser.
 3.  **Upload Audio**: Click the upload area to select an MP3 or WAV file.
 4.  **View Results**: Wait for the processing to finish and view your generated tabs!
