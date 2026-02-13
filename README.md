@@ -95,11 +95,3 @@ npm run dev
 4.  **View Results**: Wait for the processing to finish and view your generated tabs!
 
 ---
-
-## 🤝 Contributing
-
-Contributions are welcome! Please fork the repository and submit a pull request.
-
-## 📄 License
-
-This project is open source and available under the [MIT License](LICENSE).
