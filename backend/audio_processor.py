@@ -43,11 +43,27 @@ def process_audio(file_path):
         # 4. Generate Tab Data
         tabs = generate_tabs(y, sr, onset_frames, onset_times, f0, times, voiced_flag, voiced_probs)
         
+        # 5. Synthesize Audio from Tabs
+        duration = librosa.get_duration(y=y, sr=sr)
+        y_synth = synthesize_tabs(tabs, duration, sr=22050)
+        
+        # Save to outputs directory
+        import os
+        import scipy.io.wavfile as wavfile
+        synth_filename = f"synth_{os.path.basename(file_path)}.wav"
+        synth_filepath = os.path.join('outputs', synth_filename)
+        os.makedirs('outputs', exist_ok=True)
+        # Convert to 16-bit PCM for wavfile
+        wavfile.write(synth_filepath, 22050, np.int16(y_synth * 32767))
+        
+        synth_url = f"http://127.0.0.1:5000/api/audio/{synth_filename}"
+        
         return {
             "status": "success",
-            "duration": librosa.get_duration(y=y, sr=sr),
+            "duration": duration,
             "tempo": extract_tempo(y, sr),
-            "tabs": tabs
+            "tabs": tabs,
+            "synth_url": synth_url
         }
         
     except Exception as e:
@@ -69,6 +85,66 @@ def merge_close_onsets(onset_times, onset_frames):
             merged_frames.append(onset_frames[i])
     
     return np.array(merged_times), np.array(merged_frames)
+
+
+def synthesize_tabs(tabs, duration, sr=22050):
+    """Synthesize a simple audio representation of the tabs for playback."""
+    # Add 1 second of padding for the final notes to decay
+    y_synth = np.zeros(int(duration * sr) + sr)
+    
+    # 0=e(E4), 1=B3, 2=G3, 3=D3, 4=A2, 5=E2
+    string_open_freqs = {
+        0: 329.63,
+        1: 246.94,
+        2: 196.00,
+        3: 146.83,
+        4: 110.00,
+        5: 82.41
+    }
+    
+    for note_event in tabs:
+        t = note_event['time']
+        notes = note_event.get('notes', {})
+        for str_idx, fret in notes.items():
+            str_idx = int(str_idx)
+            freq = string_open_freqs[str_idx] * (2 ** (fret / 12))
+            
+            # Note duration and envelope parameters
+            note_dur = 2.0
+            t_samples = np.arange(int(note_dur * sr)) / sr
+            
+            # ADSR simple envelope: 10ms attack, exponential decay
+            attack_time = 0.01
+            decay_rate = 4.0
+            
+            attack_samples = int(attack_time * sr)
+            env = np.ones_like(t_samples)
+            if attack_samples > 0:
+                env[:attack_samples] = np.linspace(0, 1, attack_samples)
+            env[attack_samples:] = np.exp(-decay_rate * (t_samples[attack_samples:] - attack_time))
+            
+            # Basic FM-like plucked tone using sine and odd harmonics
+            tone = np.sin(2 * np.pi * freq * t_samples) + \
+                   0.3 * np.sin(2 * np.pi * 2 * freq * t_samples) + \
+                   0.1 * np.sin(2 * np.pi * 3 * freq * t_samples)
+                   
+            tone = tone * env * 0.4
+            
+            start_sample = int(t * sr)
+            end_sample = start_sample + len(tone)
+            
+            if end_sample <= len(y_synth):
+                y_synth[start_sample:end_sample] += tone
+            else:
+                overlap = len(y_synth) - start_sample
+                y_synth[start_sample:] += tone[:overlap]
+                
+    # Normalize to prevent clipping
+    max_val = np.max(np.abs(y_synth))
+    if max_val > 0:
+        y_synth = y_synth / max_val * 0.8
+        
+    return y_synth
 
 
 def extract_tempo(y, sr):

@@ -20,6 +20,11 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def home():
     return "Backend is running!"
 
+@app.route('/api/audio/<filename>')
+def serve_audio(filename):
+    from flask import send_from_directory
+    return send_from_directory(app.config['OUTPUT_FOLDER'], filename)
+
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
