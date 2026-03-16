@@ -15,12 +15,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
 @app.route('/')
 def home():
     return "Backend is running!"
 
+from flask_cors import CORS, cross_origin
+
 @app.route('/api/audio/<filename>')
+@cross_origin()
 def serve_audio(filename):
     from flask import send_from_directory
     return send_from_directory(app.config['OUTPUT_FOLDER'], filename)

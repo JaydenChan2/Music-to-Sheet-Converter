@@ -50,13 +50,15 @@ def process_audio(file_path):
         # Save to outputs directory
         import os
         import scipy.io.wavfile as wavfile
+        import urllib.parse
         synth_filename = f"synth_{os.path.basename(file_path)}.wav"
         synth_filepath = os.path.join('outputs', synth_filename)
         os.makedirs('outputs', exist_ok=True)
         # Convert to 16-bit PCM for wavfile
         wavfile.write(synth_filepath, 22050, np.int16(y_synth * 32767))
         
-        synth_url = f"http://127.0.0.1:5000/api/audio/{synth_filename}"
+        encoded_filename = urllib.parse.quote(synth_filename)
+        synth_url = f"http://127.0.0.1:5000/api/audio/{encoded_filename}"
         
         return {
             "status": "success",

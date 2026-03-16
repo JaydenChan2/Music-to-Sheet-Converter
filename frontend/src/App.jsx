@@ -11,6 +11,8 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [synthUrl, setSynthUrl] = useState(null);
+  const [playbackMode, setPlaybackMode] = useState('original');
   const audioRef = useRef(null);
   const audioUrlRef = useRef(null);
 
@@ -40,6 +42,8 @@ function App() {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setSynthUrl(null);
+    setPlaybackMode('original');
 
     // Set audio source
     if (audioRef.current) {
@@ -88,6 +92,9 @@ function App() {
       }
       console.log("Processing success:", data);
       setTabs(data.tabs);
+      if (data.synth_url) {
+        setSynthUrl(data.synth_url);
+      }
     } catch (error) {
       console.error("Processing request failed:", error);
     } finally {
@@ -161,6 +168,49 @@ function App() {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
+    setSynthUrl(null);
+    setPlaybackMode('original');
+  };
+
+  const handleModeSwitch = (mode) => {
+    if (mode === playbackMode) return;
+    
+    // Remember play state
+    const wasPlaying = isPlaying;
+    
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    
+    setPlaybackMode(mode);
+    setIsPlaying(false);
+    
+    if (audioRef.current) {
+      // Switch source based on mode
+      const newSrc = mode === 'original' ? audioUrlRef.current : synthUrl;
+      console.log("Switching audio source to:", newSrc);
+      audioRef.current.src = newSrc;
+      
+      // Start from beginning when mode switches for better clarity
+      audioRef.current.currentTime = 0;
+      setCurrentTime(0);
+      
+      audioRef.current.load();
+      
+      if (wasPlaying) {
+        // Wait for it to load enough to play
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.then(() => {
+            setIsPlaying(true);
+          }).catch(err => {
+            if (err.name !== 'AbortError') {
+              console.error("Playback error after switch:", err);
+            }
+          });
+        }
+      }
+    }
   };
 
   return (
@@ -227,6 +277,24 @@ function App() {
                   <div className="w-2 h-2 rounded-full bg-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
                   <span className="text-zinc-300 font-medium">{file.name}</span>
                 </div>
+                
+                {synthUrl && (
+                  <div className="flex items-center bg-zinc-900/40 rounded-lg p-1 border border-zinc-800/50">
+                    <button
+                      onClick={() => handleModeSwitch('original')}
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'original' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    >
+                      Original
+                    </button>
+                    <button
+                      onClick={() => handleModeSwitch('simulation')}
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'simulation' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    >
+                      Simulation
+                    </button>
+                  </div>
+                )}
+
                 <button
                   onClick={handleUploadNew}
                   className="text-xs font-medium text-zinc-500 hover:text-white transition-colors uppercase tracking-wider"
