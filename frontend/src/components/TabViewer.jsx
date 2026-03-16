@@ -1,48 +1,83 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 
-const TabViewer = ({ tabs, currentTime, isPlaying }) => {
-    const containerRef = useRef(null);
-
-    // Strings E A D G B e
+const TabViewer = ({ tabs }) => {
+    // Standard guitar string names (high to low, top to bottom as displayed)
     const stringNames = ['e', 'B', 'G', 'D', 'A', 'E'];
 
-    return (
-        <div className="w-full mt-8">
-            <div className="flex justify-between items-baseline mb-6 border-b border-zinc-800 pb-2">
-                <h3 className="text-zinc-100 font-medium tracking-tight">Transcription</h3>
-                <div className="text-xs text-zinc-500 font-mono">Standard Tuning</div>
-            </div>
+    // How many note columns per line before wrapping
+    const COLUMNS_PER_LINE = 32;
+    // How many columns per measure
+    const COLUMNS_PER_MEASURE = 8;
 
+    const renderTabs = () => {
+        if (!tabs || tabs.length === 0) {
+            return (
+                <div className="text-center py-20 border border-dashed border-zinc-800 rounded-xl">
+                    <p className="text-zinc-600 text-sm">Waiting for audio data...</p>
+                </div>
+            );
+        }
+
+        // Build column data: each column is an array of 6 values (one per string)
+        // null means rest/dash for that string
+        const columns = tabs.map(col => {
+            const row = new Array(6).fill(null);
+            if (col.notes) {
+                Object.entries(col.notes).forEach(([strIdx, fret]) => {
+                    const idx = parseInt(strIdx);
+                    if (idx >= 0 && idx < 6) {
+                        row[idx] = fret;
+                    }
+                });
+            }
+            return row;
+        });
+
+        // Split into lines
+        const lines = [];
+        for (let i = 0; i < columns.length; i += COLUMNS_PER_LINE) {
+            lines.push(columns.slice(i, i + COLUMNS_PER_LINE));
+        }
+
+        return lines.map((lineColumns, lineIdx) => (
+            <div key={lineIdx} className="mb-8">
+                <pre className="text-sm leading-6 text-zinc-300 m-0 overflow-x-auto">
+                    {stringNames.map((name, strIdx) => {
+                        // Build the string line
+                        let line = `${name.padStart(2)}|`;
+
+                        lineColumns.forEach((col, colIdx) => {
+                            const val = col[strIdx];
+                            if (val !== null && val !== undefined) {
+                                const fretStr = String(val);
+                                line += fretStr;
+                                // Pad: if fret is 2 digits, use 1 dash; if 1 digit, use 2 dashes
+                                line += '-'.repeat(Math.max(1, 3 - fretStr.length));
+                            } else {
+                                line += '---';
+                            }
+
+                            // Add measure bar every COLUMNS_PER_MEASURE
+                            if ((colIdx + 1) % COLUMNS_PER_MEASURE === 0 && colIdx < lineColumns.length - 1) {
+                                line += '|';
+                            }
+                        });
+
+                        line += '|';
+                        return line;
+                    }).join('\n')}
+                </pre>
+            </div>
+        ));
+    };
+
+    return (
+        <div className="w-full mt-6">
             <div
-                ref={containerRef}
-                className="overflow-x-auto pb-6 custom-scrollbar font-mono text-base leading-relaxed select-text"
+                className="font-mono select-text bg-zinc-900/30 rounded-xl p-6 border border-zinc-800/50"
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace" }}
             >
-                {(!tabs || tabs.length === 0) ? (
-                    <div className="text-center py-20 border border-dashed border-zinc-800 rounded-xl">
-                        <p className="text-zinc-600 text-sm">Waiting for audio data...</p>
-                    </div>
-                ) : (
-                    <div className="min-w-max bg-zinc-900/30 rounded-xl p-6 border border-zinc-800/50">
-                        {stringNames.map((strName, idx) => (
-                            <div key={idx} className="flex items-center text-zinc-400 h-8">
-                                <span className="w-8 shrink-0 text-zinc-500 font-semibold border-r border-zinc-800 mr-2">{strName}</span>
-                                <span className="tracking-[0.2em] flex-grow whitespace-nowrap text-zinc-300">
-                                    {tabs.map((column, colIdx) => (
-                                        <span
-                                            key={colIdx}
-                                            className={currentTime >= column.time && currentTime < (tabs[colIdx + 1]?.time || column.time + 0.2)
-                                                ? "bg-white text-zinc-950 px-0.5 rounded-[1px]"
-                                                : ""
-                                            }
-                                        >
-                                            {column.notes[idx] !== undefined ? column.notes[idx] : '—'}
-                                        </span>
-                                    ))}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {renderTabs()}
             </div>
         </div>
     );

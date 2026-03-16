@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import UploadSection from './components/UploadSection';
 import TabViewer from './components/TabViewer';
 import PlaybackControls from './components/PlaybackControls';
@@ -8,11 +8,45 @@ function App() {
   const [file, setFile] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [tabs, setTabs] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef(null);
+
+  // Clean up object URL on unmount or file change
+  useEffect(() => {
+    return () => {
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+      }
+    };
+  }, []);
 
   const handleFileSelected = (selectedFile) => {
     console.log("File selected:", selectedFile);
+
+    // Revoke previous URL
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+    }
+
+    // Create new audio URL
+    const url = URL.createObjectURL(selectedFile);
+    audioUrlRef.current = url;
+
     setFile(selectedFile);
-    setTabs(null); // Reset tabs on new file
+    setTabs(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+
+    // Set audio source
+    if (audioRef.current) {
+      audioRef.current.src = url;
+      audioRef.current.load();
+    }
+
     uploadFile(selectedFile);
   };
 
@@ -61,13 +95,90 @@ function App() {
     }
   };
 
+  // Audio event handlers
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (audioRef.current) {
+      setDuration(audioRef.current.duration);
+    }
+  };
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+  };
+
+  // Playback controls
+  const handlePlayPause = () => {
+    if (!audioRef.current) return;
+
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().then(() => {
+        setIsPlaying(true);
+      }).catch(err => {
+        console.error("Playback error:", err);
+      });
+    }
+  };
+
+  const handleSeek = (fraction) => {
+    if (!audioRef.current || !duration) return;
+    audioRef.current.currentTime = fraction * duration;
+    setCurrentTime(audioRef.current.currentTime);
+  };
+
+  const handleSkipBack = () => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
+    setCurrentTime(audioRef.current.currentTime);
+  };
+
+  const handleSkipForward = () => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + 5);
+    setCurrentTime(audioRef.current.currentTime);
+  };
+
+  const handleUploadNew = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setFile(null);
+    setTabs(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-white/10">
 
-      {/* Subtle Background Glow - Top Center */}
+      {/* Subtle Background Glow */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-[-20%] left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-white/[0.02] rounded-full blur-[120px]" />
       </div>
+
+      {/* Hidden Audio Element */}
+      <audio
+        ref={audioRef}
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onEnded={handleAudioEnded}
+        preload="metadata"
+      />
 
       <div className="relative z-10 max-w-5xl mx-auto px-6 py-20 flex flex-col min-h-screen">
 
@@ -88,12 +199,12 @@ function App() {
           </p>
         </header>
 
-        <main className="flex-grow w-full max-w-3xl mx-auto">
+        <main className="flex-grow w-full max-w-4xl mx-auto">
           {!file && !isProcessing && (
             <UploadSection onFileSelected={handleFileSelected} />
           )}
 
-          {/* Minimal Processing Status */}
+          {/* Processing Status */}
           {isProcessing && (
             <div className="text-center py-32 space-y-6 animate-in fade-in duration-700">
               <div className="relative w-12 h-12 mx-auto">
@@ -109,7 +220,7 @@ function App() {
 
           {/* Results View */}
           {!isProcessing && file && (
-            <div className="w-full space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
+            <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700 pb-28">
               {/* File Info Bar */}
               <div className="flex items-center justify-between py-4 border-b border-zinc-800/50">
                 <div className="flex items-center gap-3">
@@ -117,7 +228,7 @@ function App() {
                   <span className="text-zinc-300 font-medium">{file.name}</span>
                 </div>
                 <button
-                  onClick={() => setFile(null)}
+                  onClick={handleUploadNew}
                   className="text-xs font-medium text-zinc-500 hover:text-white transition-colors uppercase tracking-wider"
                 >
                   Upload New
@@ -125,19 +236,17 @@ function App() {
               </div>
 
               {/* Tab Viewer */}
-              <TabViewer
-                tabs={tabs}
-                currentTime={0}
-                isPlaying={false}
-              />
+              <TabViewer tabs={tabs} />
 
-              {/* Controls */}
+              {/* Playback Controls */}
               <PlaybackControls
-                isPlaying={false}
-                onPlayPause={() => { }}
-                progress={0}
-                duration={0}
-                tempo={120}
+                isPlaying={isPlaying}
+                onPlayPause={handlePlayPause}
+                progress={currentTime}
+                duration={duration}
+                onSeek={handleSeek}
+                onSkipBack={handleSkipBack}
+                onSkipForward={handleSkipForward}
               />
             </div>
           )}
