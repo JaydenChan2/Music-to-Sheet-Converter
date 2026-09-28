@@ -17,7 +17,8 @@ A powerful full-stack application that leverages advanced signal processing to a
 - **🎸 Guitar Tab Generation**: Automatically generates guitar tablature from audio input.
 - **🎼 Sheet Music Conversion**: (In Development) Convert melodies into standard sheet music notation.
 - **🎨 Modern UI**: Built with a beautiful, responsive interface using React and TailwindCSS.
-- **📤 Export Options**: (Coming Soon) Download your transcriptions as PDF, MIDI, or Text files.
+- **🔗 Song Links**: Paste a YouTube / SoundCloud / Bandcamp / direct audio link.
+- **📤 Export Options**: Download your transcriptions as MIDI or Text tab files.
 
 ---
 
@@ -31,7 +32,7 @@ A powerful full-stack application that leverages advanced signal processing to a
 
 ### **Backend**
 - **Framework**: Flask (Python)
-- **Audio Processing**: Librosa, NumPy, SciPy
+- **Audio Processing**: basic-pitch (neural transcription), Demucs (source separation), Librosa, yt-dlp, ffmpeg
 - **Server**: Gunicorn (Production ready)
 
 ---
@@ -49,25 +50,21 @@ Ensure you have the following installed:
 
 ### 1️⃣ Backend Setup
 
-Navigate to the `backend` directory and install Python dependencies.
+Requires **Python 3.10 or 3.11** (basic-pitch doesn't support 3.12+) and **ffmpeg**.
 
 ```bash
+brew install ffmpeg          # macOS (Linux: apt install ffmpeg)
 cd backend
 
-# Create a virtual environment
-python3 -m venv .venv
-
-# Activate the virtual environment
-source .venv/bin/activate  # macOS/Linux
-# .venv\Scripts\activate   # Windows
-
-# Install dependencies
-pip install -r requirements.txt
+# Create a virtual environment (uv shown; `python3.11 -m venv .venv` also works)
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
 
 # Run the server
-python3 app.py
+.venv/bin/python app.py
 ```
-> The backend will start on `http://127.0.0.1:5000` 🌐
+> The backend starts on `http://127.0.0.1:5001` (port 5000 is taken by AirPlay Receiver on macOS). Override with `PORT=...`.
+> The first job downloads the Demucs model (~80 MB) and is slower than later ones.
 
 ### 2️⃣ Frontend Setup
 
@@ -75,23 +72,36 @@ Open a new terminal, navigate to the `frontend` directory, and start the React a
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
 ```
-> The frontend will be available at `http://localhost:5173` 💻
+> The frontend is at `http://localhost:5173` and proxies `/api` to the backend. If the backend runs elsewhere, start Vite with `VITE_BACKEND_URL=http://host:port npm run dev`.
 
 ---
 
 ## 📖 Usage
 
-1.  **Start Services**: ensure the backend is running via `python3 app.py` and the frontend via `npm run dev`.
-    > **Tip:** Visit `http://127.0.0.1:5000` to confirm the backend is running.
+1.  **Start Services**: backend via `.venv/bin/python app.py`, frontend via `npm run dev`.
 2.  **Access App**: Open `http://localhost:5173` in your browser.
-3.  **Upload Audio**: Click the upload area to select an MP3 or WAV file.
-4.  **View Results**: Wait for the processing to finish and view your generated tabs!
+3.  **Add a song**: drop an audio file (MP3, WAV, M4A, FLAC, OGG, MP4...) or paste a link (YouTube, SoundCloud, Bandcamp, direct audio URL).
+4.  **Isolate guitar** (on by default) separates the guitar from vocals, drums and bass first. Leave it on for full songs; turn it off for solo guitar recordings to save time.
+5.  **View Results**: the tab is laid out in 4/4 bars on a 16th-note grid; the current bar highlights during playback and clicking a bar jumps there. Switch to **Tab Preview** to hear the transcription, and download it as **TXT** or **MIDI** (open the MIDI in MuseScore for standard notation).
+
+### How it works
+
+| Step | Tool |
+|---|---|
+| Download links | yt-dlp |
+| Decode any format | ffmpeg |
+| Guitar isolation | Demucs `htdemucs_6s` |
+| Polyphonic note detection | Spotify basic-pitch |
+| Tempo / beat grid | librosa beat tracking |
+| String & fret choice | Viterbi search minimising hand movement and stretch |
+
+### Measuring accuracy
+
+```bash
+cd backend && .venv/bin/python benchmark.py          # add --sweep to compare onset thresholds
+```
 
 ---

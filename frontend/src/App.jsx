@@ -3,116 +3,94 @@ import UploadSection from './components/UploadSection';
 import TabViewer from './components/TabViewer';
 import PlaybackControls from './components/PlaybackControls';
 import { Music4 } from 'lucide-react';
+import { createJobFromFile, createJobFromUrl, getHealth, waitForJob } from './api';
+
+const STAGE_LABELS = {
+  queued: 'Waiting in queue...',
+  downloading: 'Downloading audio from link...',
+  decoding: 'Decoding audio...',
+  separating: 'Isolating the guitar from the mix...',
+  transcribing: 'Detecting notes and chords...',
+  arranging: 'Finding the beat and choosing fingerings...',
+  rendering: 'Writing tab, MIDI and preview...',
+};
 
 function App() {
-  const [file, setFile] = useState(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [tabs, setTabs] = useState(null);
+  const [title, setTitle] = useState(null);
+  const [job, setJob] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [separate, setSeparate] = useState(true);
+  const [separationAvailable, setSeparationAvailable] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [synthUrl, setSynthUrl] = useState(null);
   const [playbackMode, setPlaybackMode] = useState('original');
   const audioRef = useRef(null);
-  const audioUrlRef = useRef(null);
 
-  // Clean up object URL on unmount or file change
+  const isProcessing = job !== null && job.status === 'running';
+
   useEffect(() => {
-    return () => {
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-      }
-    };
+    getHealth()
+      .then((h) => setSeparationAvailable(h.separation_available))
+      .catch(() => setError("Can't reach the backend. Start it with: cd backend && .venv/bin/python app.py"));
   }, []);
 
-  const handleFileSelected = (selectedFile) => {
-    console.log("File selected:", selectedFile);
+  // Keep the playhead smooth: timeupdate only fires ~4x per second.
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf;
+    const tick = () => {
+      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
 
-    // Revoke previous URL
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
+  const resetPlayback = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
     }
-
-    // Create new audio URL
-    const url = URL.createObjectURL(selectedFile);
-    audioUrlRef.current = url;
-
-    setFile(selectedFile);
-    setTabs(null);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
-    setSynthUrl(null);
     setPlaybackMode('original');
-
-    // Set audio source
-    if (audioRef.current) {
-      audioRef.current.src = url;
-      audioRef.current.load();
-    }
-
-    uploadFile(selectedFile);
   };
 
-  const uploadFile = async (file) => {
-    setIsProcessing(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
+  const startJob = async (label, create) => {
+    resetPlayback();
+    setTitle(label);
+    setResult(null);
+    setError(null);
+    setJob({ status: 'running', stage: 'queued', progress: 0 });
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/upload', {
-        method: 'POST',
-        body: formData,
+      const created = await create();
+      const finished = await waitForJob(created.id, (j) => {
+        setJob(j);
+        if (j.title) setTitle(j.title);
       });
-      const data = await response.json();
-      console.log("Upload success:", data);
-
-      if (data.filename) {
-        await processFile(data.filename);
+      setResult(finished.result);
+      if (audioRef.current) {
+        audioRef.current.src = finished.result.files.original;
+        audioRef.current.load();
       }
-    } catch (error) {
-      console.error("Upload error:", error);
-      setIsProcessing(false);
+      setJob(finished);
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+      setJob(null);
+      setTitle(null);
     }
   };
 
-  const processFile = async (filename) => {
-    try {
-      const response = await fetch('http://127.0.0.1:5000/api/process', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ filename }),
-      });
-      const data = await response.json();
-      if (data.error) {
-        console.error("Processing error:", data.error);
-        return;
-      }
-      console.log("Processing success:", data);
-      setTabs(data.tabs);
-      if (data.synth_url) {
-        setSynthUrl(data.synth_url);
-      }
-    } catch (error) {
-      console.error("Processing request failed:", error);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  // Audio event handlers
-  const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
-    }
-  };
+  const handleFileSelected = (file) => startJob(file.name, () => createJobFromFile(file, separate));
+  const handleUrlSubmitted = (url) => startJob(url, () => createJobFromUrl(url, separate));
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current) {
-      setDuration(audioRef.current.duration);
-    }
+    if (audioRef.current) setDuration(audioRef.current.duration);
   };
 
   const handleAudioEnded = () => {
@@ -120,97 +98,56 @@ function App() {
     setCurrentTime(0);
   };
 
-  // Playback controls
   const handlePlayPause = () => {
     if (!audioRef.current) return;
-
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-      }).catch(err => {
+      audioRef.current.play().then(() => setIsPlaying(true)).catch((err) => {
         console.error("Playback error:", err);
       });
     }
   };
 
-  const handleSeek = (fraction) => {
-    if (!audioRef.current || !duration) return;
-    audioRef.current.currentTime = fraction * duration;
+  const seekTo = (seconds) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, Math.min(duration || seconds, seconds));
     setCurrentTime(audioRef.current.currentTime);
   };
 
-  const handleSkipBack = () => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 5);
-    setCurrentTime(audioRef.current.currentTime);
-  };
-
-  const handleSkipForward = () => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.min(duration, audioRef.current.currentTime + 5);
-    setCurrentTime(audioRef.current.currentTime);
-  };
+  const handleSeek = (fraction) => duration && seekTo(fraction * duration);
+  const handleSkipBack = () => audioRef.current && seekTo(audioRef.current.currentTime - 5);
+  const handleSkipForward = () => audioRef.current && seekTo(audioRef.current.currentTime + 5);
 
   const handleUploadNew = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-    setFile(null);
-    setTabs(null);
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(0);
-    setSynthUrl(null);
-    setPlaybackMode('original');
+    resetPlayback();
+    setJob(null);
+    setResult(null);
+    setTitle(null);
+    setError(null);
   };
 
   const handleModeSwitch = (mode) => {
-    if (mode === playbackMode) return;
-    
-    // Remember play state
+    if (mode === playbackMode || !audioRef.current || !result) return;
+    const audio = audioRef.current;
     const wasPlaying = isPlaying;
-    
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    
-    setPlaybackMode(mode);
+    const position = audio.currentTime;
+    audio.pause();
     setIsPlaying(false);
-    
-    if (audioRef.current) {
-      // Switch source based on mode
-      const newSrc = mode === 'original' ? audioUrlRef.current : synthUrl;
-      console.log("Switching audio source to:", newSrc);
-      audioRef.current.src = newSrc;
-      
-      // Start from beginning when mode switches for better clarity
-      audioRef.current.currentTime = 0;
-      setCurrentTime(0);
-      
-      audioRef.current.load();
-      
+    setPlaybackMode(mode);
+
+    // Keep the same position so you can A/B the transcription against the original.
+    audio.src = mode === 'original' ? result.files.original : result.files.synth;
+    audio.load();
+    audio.addEventListener('loadedmetadata', () => {
+      audio.currentTime = Math.min(position, audio.duration || position);
       if (wasPlaying) {
-        // Wait for it to load enough to play
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise.then(() => {
-            setIsPlaying(true);
-          }).catch(err => {
-            if (err.name !== 'AbortError') {
-              console.error("Playback error after switch:", err);
-            }
-          });
-        }
+        audio.play().then(() => setIsPlaying(true)).catch((err) => {
+          if (err.name !== 'AbortError') console.error("Playback error after switch:", err);
+        });
       }
-    }
+    }, { once: true });
   };
 
   return (
@@ -224,16 +161,16 @@ function App() {
       {/* Hidden Audio Element */}
       <audio
         ref={audioRef}
-        onTimeUpdate={handleTimeUpdate}
+        onTimeUpdate={() => audioRef.current && setCurrentTime(audioRef.current.currentTime)}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleAudioEnded}
-        preload="metadata"
+        preload="auto"
       />
 
       <div className="relative z-10 max-w-5xl mx-auto px-6 py-20 flex flex-col min-h-screen">
 
         {/* Header */}
-        <header className="mb-20 text-center space-y-4">
+        <header className="mb-16 text-center space-y-4">
           <div className="flex items-center justify-center gap-3 mb-6">
             <Music4 size={28} strokeWidth={1.5} className="text-zinc-100" />
             <span className="text-sm font-medium tracking-widest text-zinc-500 uppercase">Guitar Tab AI</span>
@@ -244,69 +181,78 @@ function App() {
           </h1>
 
           <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto font-light leading-relaxed text-balance">
-            Instant, accurate guitar transcription powered by advanced signal processing.
-            <span className="block mt-2 text-zinc-500">upload an audio file to get started.</span>
+            Polyphonic guitar transcription with neural pitch detection and source separation.
+            <span className="block mt-2 text-zinc-500">Upload an audio file or paste a link to a song.</span>
           </p>
         </header>
 
         <main className="flex-grow w-full max-w-4xl mx-auto">
-          {!file && !isProcessing && (
-            <UploadSection onFileSelected={handleFileSelected} />
+          {!job && (
+            <UploadSection
+              onFileSelected={handleFileSelected}
+              onUrlSubmitted={handleUrlSubmitted}
+              separate={separate}
+              onSeparateChange={setSeparate}
+              separationAvailable={separationAvailable}
+              error={error}
+            />
           )}
 
           {/* Processing Status */}
           {isProcessing && (
-            <div className="text-center py-32 space-y-6 animate-in fade-in duration-700">
+            <div className="text-center py-24 space-y-6 animate-in fade-in duration-700">
               <div className="relative w-12 h-12 mx-auto">
                 <div className="absolute inset-0 border-2 border-zinc-800 rounded-full"></div>
                 <div className="absolute inset-0 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
               </div>
-              <div className="space-y-1">
-                <p className="text-zinc-200 font-medium tracking-tight">Processing Audio</p>
-                <p className="text-zinc-500 text-sm">analyzing frequencies...</p>
+              <div className="space-y-3">
+                <p className="text-zinc-200 font-medium tracking-tight truncate max-w-md mx-auto">{title}</p>
+                <p className="text-zinc-500 text-sm">{STAGE_LABELS[job.stage] || 'Processing...'}</p>
+                <div className="w-64 h-1 mx-auto bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-zinc-300 transition-all duration-500" style={{ width: `${Math.round((job.progress || 0) * 100)}%` }} />
+                </div>
+                {job.stage === 'separating' && (
+                  <p className="text-zinc-600 text-xs">This is the slowest step: roughly 10-60s per song.</p>
+                )}
               </div>
             </div>
           )}
 
           {/* Results View */}
-          {!isProcessing && file && (
+          {result && (
             <div className="w-full space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700 pb-28">
               {/* File Info Bar */}
-              <div className="flex items-center justify-between py-4 border-b border-zinc-800/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
-                  <span className="text-zinc-300 font-medium">{file.name}</span>
+              <div className="flex items-center justify-between gap-4 py-4 border-b border-zinc-800/50">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-2 h-2 shrink-0 rounded-full bg-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                  <span className="text-zinc-300 font-medium truncate">{title}</span>
                 </div>
-                
-                {synthUrl && (
-                  <div className="flex items-center bg-zinc-900/40 rounded-lg p-1 border border-zinc-800/50">
-                    <button
-                      onClick={() => handleModeSwitch('original')}
-                      className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'original' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                    >
-                      Original
-                    </button>
-                    <button
-                      onClick={() => handleModeSwitch('simulation')}
-                      className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'simulation' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                    >
-                      Simulation
-                    </button>
-                  </div>
-                )}
+
+                <div className="flex items-center bg-zinc-900/40 rounded-lg p-1 border border-zinc-800/50 shrink-0">
+                  <button
+                    onClick={() => handleModeSwitch('original')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'original' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Original
+                  </button>
+                  <button
+                    onClick={() => handleModeSwitch('simulation')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'simulation' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Tab Preview
+                  </button>
+                </div>
 
                 <button
                   onClick={handleUploadNew}
-                  className="text-xs font-medium text-zinc-500 hover:text-white transition-colors uppercase tracking-wider"
+                  className="text-xs font-medium text-zinc-500 hover:text-white transition-colors uppercase tracking-wider shrink-0"
                 >
-                  Upload New
+                  New Song
                 </button>
               </div>
 
-              {/* Tab Viewer */}
-              <TabViewer tabs={tabs} />
+              <TabViewer result={result} currentTime={currentTime} isPlaying={isPlaying} onSeek={seekTo} />
 
-              {/* Playback Controls */}
               <PlaybackControls
                 isPlaying={isPlaying}
                 onPlayPause={handlePlayPause}

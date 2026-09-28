@@ -1,74 +1,56 @@
-import requests
-import numpy as np
-import scipy.io.wavfile
+"""Smoke test: synthesise a low E, send it through the backend job API and check the tab."""
 import os
+import time
 
-# Create a dummy wav file (E2 note, 82.4 Hz)
-sr = 22050
-t = np.linspace(0, 1.0, int(sr * 1.0))
-y = 0.5 * np.sin(2 * np.pi * 82.41 * t)
+import numpy as np
+import requests
+import scipy.io.wavfile
+
+BASE_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:5001") + "/api"
 filename = "test_e2.wav"
-scipy.io.wavfile.write(filename, sr, (y * 32767).astype(np.int16))
 
-BASE_URL = "http://127.0.0.1:5000/api"
+
+def make_test_file():
+    sr = 22050
+    t = np.linspace(0, 2.0, int(sr * 2.0), endpoint=False)
+    f = 82.41  # E2
+    y = sum(np.sin(2 * np.pi * k * f * t) / k for k in range(1, 6)) * np.exp(-2 * t)
+    scipy.io.wavfile.write(filename, sr, (y / np.abs(y).max() * 0.8 * 32767).astype(np.int16))
+
 
 def run_test():
+    make_test_file()
     try:
-        # 1. Upload
-        print(f"Uploading {filename}...")
-        with open(filename, 'rb') as f:
-            files = {'file': f}
-            r = requests.post(f"{BASE_URL}/upload", files=files)
-            
-        if r.status_code != 200:
-            print(f"Upload failed: {r.text}")
+        with open(filename, "rb") as f:
+            r = requests.post(f"{BASE_URL}/jobs", files={"file": f}, data={"separate": "false"})
+        r.raise_for_status()
+        job_id = r.json()["id"]
+        print(f"Job {job_id} created")
+
+        while True:
+            job = requests.get(f"{BASE_URL}/jobs/{job_id}").json()
+            if job["status"] != "running":
+                break
+            time.sleep(0.5)
+
+        if job["status"] != "done":
+            print(f"Processing failed: {job['error']}")
             return False
-            
-        print("Upload successful.")
-        
-        # 2. Process
-        print("Processing...")
-        r = requests.post(f"{BASE_URL}/process", json={'filename': filename})
-        
-        if r.status_code != 200:
-            print(f"Processing failed: {r.text}")
-            return False
-            
-        data = r.json()
-        print("Processing successful.")
-        print(f"Tabs found: {len(data.get('tabs', []))}")
-        print(f"Tempo: {data.get('tempo')}")
-        
-        # Assertions
-        assert data['status'] == 'success'
-        assert len(data['tabs']) > 0
-        
-        # Check if tab note is basically E2 (String 5, Fret 0)
-        # Tab structure: { "notes": { "visual_string_idx": fret } }
-        # E2 -> visual string 5 (Low E), fret 0
-        
-        first_note = data['tabs'][0]['notes']
+
+        tabs = job["result"]["tabs"]
+        print(f"Tabs found: {len(tabs)}, tempo: {job['result']['tempo']}")
+        first_note = tabs[0]["notes"] if tabs else {}
         print(f"First note: {first_note}")
-        
-        # We expect something close to E2
-        # My implementation maps E2 -> visual string 5.
-        
-        if '5' in first_note and first_note['5'] == 0:
+        # Visual string 5 is the low E string
+        if first_note.get("5") == 0:
             print("PITCH VERIFIED: Correctly identified Low E (E2).")
-        else:
-            print("PITCH CHECK WARNING: Did not exactly match E2 open string.")
-            
-        return True
-        
-    except Exception as e:
-        print(f"Test failed with exception: {e}")
+            return True
+        print("PITCH CHECK FAILED: expected low E open string.")
         return False
     finally:
         if os.path.exists(filename):
             os.remove(filename)
 
+
 if __name__ == "__main__":
-    if run_test():
-        print("VERIFICATION_SUCCESS")
-    else:
-        print("VERIFICATION_FAILURE")
+    print("VERIFICATION_SUCCESS" if run_test() else "VERIFICATION_FAILURE")
