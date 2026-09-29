@@ -21,7 +21,7 @@ JOBS_DIR = os.path.join(BASE_DIR, 'jobs')
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'}
-SERVED_FILES = {'original.mp3', 'synth.wav', 'transcription.mid', 'tab.txt'}
+SERVED_FILES = {'original.mp3', 'transcription.mid', 'tab.txt'}
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
@@ -60,7 +60,6 @@ def run_job(job_id):
         base = f"/api/jobs/{job_id}/files"
         result['files'] = {
             'original': f"{base}/original.mp3",
-            'synth': f"{base}/synth.wav",
             'midi': f"{base}/transcription.mid",
             'text': f"{base}/tab.txt",
         }

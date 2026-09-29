@@ -17,7 +17,6 @@ import threading
 
 import librosa
 import numpy as np
-import scipy.io.wavfile as wavfile
 import soundfile as sf
 
 log = logging.getLogger(__name__)
@@ -54,7 +53,7 @@ BEATS_PER_MEASURE = 4
 SLOTS_PER_MEASURE = SLOTS_PER_BEAT * BEATS_PER_MEASURE
 
 # basic-pitch model output layout
-BP_FPS = 22050 / 256
+BP_FPS = 22050 / 256  # nominal only: basic-pitch's real frame times drift (see _frame_times)
 BP_MIDI_OFFSET = 21
 CONTOUR_BINS_PER_SEMITONE = 3
 
@@ -69,8 +68,7 @@ SLIDE_MID_RATIO = 0.8  # in-between pitch must be this loud relative to both end
 SLIDE_MIN_FRAMES = 3  # ~35 ms of audible glide
 SLIDE_MIN_SPAN = 0.75  # fraction of the in-between pitch range the glide must cross
 SLIDE_MIN_CORR = 0.9  # how steadily it must move toward the target
-SLIDE_STRING_PENALTY = 4.0
-SYNTH_GLIDE_S = 0.08  # fingering cost of splitting a slide across two strings
+SLIDE_STRING_PENALTY = 4.0  # fingering cost of splitting a slide across two strings
 
 _model_lock = threading.Lock()
 _bp_model = None
@@ -233,12 +231,12 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
             'duration': ev['duration'],
             'notes': {str(5 - s): f for s, f in ev['fingering']},
             'slides': {str(5 - s): d for s, d in ev.get('slides', {}).items()},
+            'velocities': _velocities(ev, tuning['open_strings']),
         }
         for ev in events if ev['fingering']
     ]
 
     progress('rendering', 0.95)
-    write_synth(events, duration, os.path.join(job_dir, 'synth.wav'), tuning)
     write_midi(events, tempo, os.path.join(job_dir, 'transcription.mid'), tuning)
     with open(os.path.join(job_dir, 'tab.txt'), 'w') as f:
         f.write(render_ascii_tab(tabs, len(measures), tempo, tuning))
@@ -327,9 +325,26 @@ def detect_notes(stem_path, onset_threshold=0.7, tuning=None):
         multiple_pitch_bends=False,
         melodia_trick=True,
     )
-    notes = clean_notes(note_events, model_output['onset'], tuning['low'], tuning['high'])
-    detect_slides(notes, model_output['contour'])
+    frame_times = _frame_times(model_output['onset'].shape[0])
+    notes = clean_notes(note_events, model_output['onset'], tuning['low'], tuning['high'], frame_times)
+    detect_slides(notes, model_output['contour'], frame_times)
     return notes
+
+
+def _frame_times(n_frames):
+    """Timestamp of each basic-pitch output frame.
+
+    basic-pitch analyses audio in overlapping ~2 s windows, so its frames are
+    not evenly spaced at BP_FPS: they fall ~10 ms further behind per window.
+    Converting time -> frame with a flat rate is off by ~1 s three minutes into
+    a song, which made real notes look like they had no attack.
+    """
+    from basic_pitch.note_creation import model_frames_to_time
+    return model_frames_to_time(n_frames)
+
+
+def _frame_at(frame_times, t):
+    return int(np.clip(np.searchsorted(frame_times, t), 0, len(frame_times) - 1))
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +356,7 @@ def _contour_bin(midi):
     return (midi - BP_MIDI_OFFSET) * CONTOUR_BINS_PER_SEMITONE + 1
 
 
-def glide_features(contour, a, b):
+def glide_features(contour, a, b, frame_times):
     """Describe the pitch movement between note a and the following note b.
 
     Counts frames where the strongest pitch is strictly *between* the two notes
@@ -355,8 +370,8 @@ def glide_features(contour, a, b):
     lo, hi = sorted((b_a, b_b))
     if hi - lo < 6:  # needs at least 2 semitones
         return 0, 0.0, 0.0
-    f0 = int(max(a['start'] + 0.05, b['start'] - SLIDE_LOOKBACK) * BP_FPS)
-    f1 = min(int((b['start'] + SLIDE_LOOKAHEAD) * BP_FPS), len(contour))
+    f0 = _frame_at(frame_times, max(a['start'] + 0.05, b['start'] - SLIDE_LOOKBACK))
+    f1 = _frame_at(frame_times, b['start'] + SLIDE_LOOKAHEAD)
     if f1 <= f0:
         return 0, 0.0, 0.0
 
@@ -377,7 +392,7 @@ def glide_features(contour, a, b):
     return int(frames.size), float(span), corr
 
 
-def detect_slides(notes, contour):
+def detect_slides(notes, contour, frame_times):
     """Mark notes reached by sliding: n['slide_from'] = pitch slid from."""
     candidates = []
     for b in notes:
@@ -386,7 +401,7 @@ def detect_slides(notes, contour):
             legato = -SLIDE_MAX_OVERLAP <= b['start'] - a['end'] <= SLIDE_MAX_GAP
             if a is b or not legato or a['start'] > b['start'] - 0.05 or not 2 <= interval <= SLIDE_MAX_INTERVAL:
                 continue
-            frames, span, corr = glide_features(contour, a, b)
+            frames, span, corr = glide_features(contour, a, b, frame_times)
             if frames >= SLIDE_MIN_FRAMES and span >= SLIDE_MIN_SPAN and corr >= SLIDE_MIN_CORR:
                 candidates.append((interval, -span, id(a), id(b), a, b))
 
@@ -401,7 +416,9 @@ def detect_slides(notes, contour):
         b['slide_from'] = a['pitch']
 
 
-def clean_notes(note_events, onset_probs, low=OPEN_STRINGS[0], high=OPEN_STRINGS[-1] + MAX_FRET):
+def clean_notes(note_events, onset_probs, low=OPEN_STRINGS[0], high=OPEN_STRINGS[-1] + MAX_FRET, frame_times=None):
+    if frame_times is None:
+        frame_times = _frame_times(len(onset_probs))
     notes = [
         {'start': float(s), 'end': float(e), 'pitch': int(p), 'amp': float(a)}
         for s, e, p, a, _ in note_events
@@ -410,7 +427,7 @@ def clean_notes(note_events, onset_probs, low=OPEN_STRINGS[0], high=OPEN_STRINGS
 
     def onset_strength(n):
         col = n['pitch'] - BP_MIDI_OFFSET
-        frame = int(round(n['start'] * BP_FPS))
+        frame = _frame_at(frame_times, n['start'])
         lo, hi = max(0, frame - 2), min(len(onset_probs), frame + 3)
         return float(onset_probs[lo:hi, col].max()) if hi > lo else 0.0
 
@@ -718,60 +735,10 @@ def render_ascii_tab(tabs, num_measures, tempo, tuning, measures_per_line=4):
     return '\n'.join(out)
 
 
-def write_synth(events, duration, path, tuning, sr=SR):
-    """Render the tab as a simple plucked-string preview.
-
-    Each string plays one note at a time (a new note cuts off the previous one
-    on that string, like a real guitar), and slides glide in pitch instead of
-    being re-plucked.
-    """
-    notes = []  # (string, start, length, midi, slide_from_midi)
-    for ev in events:
-        for string, fret in ev['fingering']:
-            length = min(max(ev['duration'], 0.25) + 0.4, 3.0)
-            midi = tuning['open_strings'][string] + fret
-            # link_slides guarantees the previous note on this string is the slide's source
-            source = _previous_pitch(notes, string, midi) if string in ev.get('slides', {}) else None
-            notes.append((string, ev['time'], length, midi, source))
-
-    by_string = {}
-    for n in notes:
-        by_string.setdefault(n[0], []).append(n)
-
-    y = np.zeros(int((duration + 2) * sr))
-    for string_notes in by_string.values():
-        string_notes.sort(key=lambda n: n[1])
-        for i, (_, start_t, length, midi, source) in enumerate(string_notes):
-            if i + 1 < len(string_notes):
-                length = min(length, string_notes[i + 1][1] - start_t + 0.01)
-            if length <= 0:
-                continue
-            t = np.arange(int(length * sr)) / sr
-            pitch = np.full(t.shape, float(midi))
-            if source is not None:
-                glide = t < SYNTH_GLIDE_S
-                pitch[glide] = source + (midi - source) * t[glide] / SYNTH_GLIDE_S
-                attack = np.minimum(1.0, 0.5 + t / 0.02)  # no fresh pluck
-                env = np.exp(-3.0 * (t + 0.15)) * attack
-            else:
-                env = np.exp(-3.0 * t) * np.minimum(1.0, t / 0.005)
-            env *= np.clip((length - t) / 0.03, 0, 1)  # release
-            phase = 2 * np.pi * np.cumsum(librosa.midi_to_hz(pitch)) / sr
-            tone = sum(np.sin(k * phase) * np.exp(-k * 1.2 * t) / k for k in range(1, 6))
-            start = int(start_t * sr)
-            end = min(start + len(t), len(y))
-            y[start:end] += tone[:end - start] * env[:end - start]
-    peak = np.max(np.abs(y))
-    if peak > 0:
-        y = y / peak * 0.8
-    wavfile.write(path, sr, np.int16(y * 32767))
-
-
-def _previous_pitch(notes, string, default):
-    for s, _, _, midi, _ in reversed(notes):
-        if s == string:
-            return midi
-    return default
+def _velocities(ev, open_strings):
+    """Per-string loudness 0..1 (visual string index -> amplitude) for playback."""
+    amps = {n['pitch']: n['amp'] for n in ev['notes']}
+    return {str(5 - s): round(amps.get(open_strings[s] + f, 0.6), 2) for s, f in ev['fingering']}
 
 
 def write_midi(events, tempo, path, tuning):

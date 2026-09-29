@@ -6,21 +6,17 @@ const STANDARD_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
 const SLIDE_MARKS = { up: '/', down: '\\' };
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace";
 
-// Render one measure as 6 text rows. Every 16th-note slot gets a column wide
-// enough for its widest fret number plus one dash, so rhythm stays readable.
-function renderMeasure(cells) {
-    const rows = Array.from({ length: 6 }, () => '');
-    cells.forEach((slot) => {
-        const width = Math.max(1, ...slot.map((f) => (f === null ? 0 : f.length))) + 1;
-        slot.forEach((cell, r) => {
-            const val = cell ?? '';
-            rows[r] += val + '-'.repeat(width - val.length);
-        });
+// Lay out one measure as 16th-note slot columns. Each slot is as wide as its
+// widest fret number plus one dash, so rhythm stays readable.
+function layoutMeasure(cells) {
+    const slots = cells.map((slot) => {
+        const width = Math.max(1, ...slot.map((c) => (c ? c.text.length : 0))) + 1;
+        return { width, cells: slot.map((c) => ({ ...c, pad: '-'.repeat(width - (c ? c.text.length : 0)) })) };
     });
-    return rows.map((row) => row + '|');
+    return { slots, width: slots.reduce((w, s) => w + s.width, 0) + 1 };
 }
 
-const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
+const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick }) => {
     const containerRef = useRef(null);
     const charRef = useRef(null);
     const activeRef = useRef(null);
@@ -36,10 +32,11 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
             if (!measure) return;
             Object.entries(col.notes).forEach(([strIdx, fret]) => {
                 // "/5" = slid up into fret 5, "\3" = slid down into fret 3
-                measure[col.position][parseInt(strIdx)] = (SLIDE_MARKS[col.slides?.[strIdx]] || '') + fret;
+                const text = (SLIDE_MARKS[col.slides?.[strIdx]] || '') + fret;
+                measure[col.position][parseInt(strIdx)] = { text, fret, string: parseInt(strIdx) };
             });
         });
-        return result.measures.map((m, i) => ({ ...m, rows: renderMeasure(cells[i]) }));
+        return result.measures.map((m, i) => ({ ...m, ...layoutMeasure(cells[i]) }));
     }, [result]);
 
     // Work out how many characters fit per line so measures wrap cleanly.
@@ -62,7 +59,7 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
         const labelChars = 2 + Math.max(...(result?.tuning?.labels || STANDARD_LABELS).map((l) => l.length));
         let width = labelChars;
         measures.forEach((m) => {
-            const w = m.rows[0].length;
+            const w = m.width;
             if (line.length && width + w > availableChars) {
                 out.push(line);
                 line = [];
@@ -76,6 +73,10 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
     }, [measures, availableChars, result]);
 
     const activeIndex = measures.findIndex((m) => currentTime >= m.start && currentTime < m.end);
+    const active = measures[activeIndex];
+    const activeSlot = active
+        ? Math.floor(((currentTime - active.start) / (active.end - active.start)) * active.slots.length)
+        : -1;
 
     useEffect(() => {
         if (isPlaying && activeRef.current) {
@@ -135,16 +136,37 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
                                 {labels.map((n, i) => <div key={i}>{n.padStart(labelWidth)}|</div>)}
                             </div>
                             {line.map((m) => {
-                                const active = m.index === activeIndex;
+                                const isActive = m.index === activeIndex;
                                 return (
                                     <div
                                         key={m.index}
-                                        ref={active ? activeRef : null}
+                                        ref={isActive ? activeRef : null}
                                         onClick={() => onSeek?.(Math.max(0, m.start))}
                                         title={`Bar ${m.index + 1}`}
-                                        className={`cursor-pointer rounded-sm transition-colors ${active ? 'bg-white/10 text-white' : 'hover:bg-white/5'}`}
+                                        className={`flex cursor-pointer rounded-sm transition-colors ${isActive ? 'bg-white/10 text-white' : 'hover:bg-white/5'}`}
                                     >
-                                        {m.rows.map((row, r) => <div key={r}>{row}</div>)}
+                                        {m.slots.map((slot, si) => (
+                                            <div key={si} className={isActive && si === activeSlot && isPlaying ? 'bg-white/20 rounded-sm' : ''}>
+                                                {slot.cells.map((cell, r) => (
+                                                    <div key={r}>
+                                                        {cell && cell.text ? (
+                                                            <span
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    onNoteClick?.(cell.string, cell.fret);
+                                                                }}
+                                                                title="Play this note"
+                                                                className="hover:text-emerald-300 hover:bg-emerald-400/10 rounded-sm"
+                                                            >
+                                                                {cell.text}
+                                                            </span>
+                                                        ) : null}
+                                                        {cell.pad}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                        <div>{Array.from({ length: 6 }, (_, r) => <div key={r}>|</div>)}</div>
                                     </div>
                                 );
                             })}

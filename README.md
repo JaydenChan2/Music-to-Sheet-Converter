@@ -86,7 +86,7 @@ npm run dev
 3.  **Set up your guitar**: pick the tuning used in the recording (Standard, Drop D, half/whole step down, Drop C/C#, Open G/D/E, DADGAD, or a custom one like `D A D G B E`) and the capo fret, if any. With a capo, frets are written relative to the capo. Your choice is remembered.
 4.  **Add a song**: drop an audio file (MP3, WAV, M4A, FLAC, OGG, MP4...) or paste a link (YouTube, SoundCloud, Bandcamp, direct audio URL).
 5.  **Isolate guitar** (on by default) separates the guitar from vocals, drums and bass first. Leave it on for full songs; turn it off for solo guitar recordings to save time.
-6.  **View Results**: the tab is laid out in 4/4 bars on a 16th-note grid; the current bar highlights during playback and clicking a bar jumps there. Slides are marked `/` (up) and `\` (down), e.g. `3/5`. Switch to **Tab Preview** to hear the transcription, and download it as **TXT** or **MIDI** (open the MIDI in MuseScore for standard notation).
+6.  **View Results**: the tab is laid out in 4/4 bars on a 16th-note grid; the current bar highlights during playback and clicking a bar jumps there. Slides are marked `/` (up) and `\` (down), e.g. `3/5`. Switch to **Synth** to hear the tab played by a built-in guitar synthesizer (acoustic, nylon, clean or overdriven electric), slow it down to 50-75%, loop a bar, turn on a metronome, or click any fret number to hear that note. Download it as **TXT** or **MIDI** (open the MIDI in MuseScore for standard notation).
 
 ### How it works
 
@@ -98,6 +98,7 @@ npm run dev
 | Polyphonic note detection | Spotify basic-pitch |
 | Tempo / beat grid | librosa beat tracking |
 | String & fret choice | Viterbi search minimising hand movement and stretch |
+| Tab playback | Karplus-Strong plucked-string synthesis in the browser (Web Audio API) |
 | Slide detection | basic-pitch pitch contour: a slide sweeps through the frets in between; a re-pick or hammer-on jumps |
 
 ### Measuring accuracy

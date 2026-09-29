@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import UploadSection from './components/UploadSection';
 import TabViewer from './components/TabViewer';
 import PlaybackControls from './components/PlaybackControls';
+import SynthPanel from './components/SynthPanel';
+import { TabSynth } from './synth';
 import { Music4 } from 'lucide-react';
 import { createJobFromFile, createJobFromUrl, getHealth, waitForJob } from './api';
 
@@ -12,17 +14,28 @@ const STAGE_LABELS = {
   separating: 'Isolating the guitar from the mix...',
   transcribing: 'Detecting notes and chords...',
   arranging: 'Finding the beat and choosing fingerings...',
-  rendering: 'Writing tab, MIDI and preview...',
+  rendering: 'Writing tab and MIDI...',
 };
 
 const DEFAULT_OPTIONS = { separate: true, tuning: 'standard', capo: 0, customTuning: '' };
 const OPTIONS_KEY = 'guitar-options';
 
-function loadOptions() {
+const DEFAULT_PLAYBACK = { mode: 'original', tone: 'acoustic', speed: 1, metronome: false, volume: 0.8 };
+const PLAYBACK_KEY = 'playback-settings';
+
+function loadSaved(key, defaults) {
   try {
-    return { ...DEFAULT_OPTIONS, ...JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}') };
+    return { ...defaults, ...JSON.parse(localStorage.getItem(key) || '{}') };
   } catch {
-    return DEFAULT_OPTIONS;
+    return defaults;
+  }
+}
+
+function save(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage unavailable (private mode) - settings just won't persist
   }
 }
 
@@ -31,17 +44,22 @@ function App() {
   const [job, setJob] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [options, setOptions] = useState(loadOptions);
+  const [options, setOptions] = useState(() => loadSaved(OPTIONS_KEY, DEFAULT_OPTIONS));
   const [tunings, setTunings] = useState([{ id: 'standard', name: 'Standard', notes: 'E A D G B E' }]);
   const [maxCapo, setMaxCapo] = useState(12);
   const [separationAvailable, setSeparationAvailable] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [playbackMode, setPlaybackMode] = useState('original');
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [playback, setPlayback] = useState(() => loadSaved(PLAYBACK_KEY, DEFAULT_PLAYBACK));
+  const [loopBar, setLoopBar] = useState(null);
   const audioRef = useRef(null);
+  const synth = useMemo(() => new TabSynth(), []);
 
   const isProcessing = job !== null && job.status === 'running';
+  const isSynth = playback.mode === 'synth';
+  const duration = isSynth ? result?.duration || 0 : audioDuration;
+  const loop = loopBar !== null && result ? result.measures[loopBar] : null;
 
   useEffect(() => {
     getHealth()
@@ -51,33 +69,55 @@ function App() {
         if (h.max_capo) setMaxCapo(h.max_capo);
       })
       .catch(() => setError("Can't reach the backend. Start it with: cd backend && .venv/bin/python app.py"));
-  }, []);
+    return () => synth.stop();
+  }, [synth]);
 
   const handleOptionChange = (key, value) => {
     setOptions((prev) => {
       const next = { ...prev, [key]: value };
-      try {
-        localStorage.setItem(OPTIONS_KEY, JSON.stringify(next));
-      } catch {
-        // storage unavailable (private mode) - options just won't persist
-      }
+      save(OPTIONS_KEY, next);
       return next;
     });
   };
 
-  // Keep the playhead smooth: timeupdate only fires ~4x per second.
+  // Push playback settings into both players.
+  useEffect(() => {
+    synth.setTone(playback.tone);
+    synth.setSpeed(playback.speed);
+    synth.setMetronome(playback.metronome);
+    synth.setVolume(playback.volume);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.playbackRate = playback.speed;
+      audio.preservesPitch = true;
+      audio.volume = playback.volume;
+    }
+  }, [synth, playback]);
+
+  useEffect(() => {
+    synth.setLoop(loop ? { start: Math.max(0, loop.start), end: loop.end } : null);
+  }, [synth, loop]);
+
+  const position = () => (isSynth ? synth.currentTime() : audioRef.current?.currentTime || 0);
+
+  // Keep the playhead smooth, and loop the original audio (the synth loops itself).
   useEffect(() => {
     if (!isPlaying) return;
     let raf;
     const tick = () => {
-      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
+      let t = isSynth ? synth.currentTime() : audioRef.current?.currentTime || 0;
+      if (!isSynth && loop && audioRef.current && t >= loop.end) {
+        audioRef.current.currentTime = t = Math.max(0, loop.start);
+      }
+      setCurrentTime(t);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [isPlaying]);
+  }, [isPlaying, isSynth, synth, loop]);
 
   const resetPlayback = () => {
+    synth.stop();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.removeAttribute('src');
@@ -85,8 +125,8 @@ function App() {
     }
     setIsPlaying(false);
     setCurrentTime(0);
-    setDuration(0);
-    setPlaybackMode('original');
+    setAudioDuration(0);
+    setLoopBar(null);
   };
 
   const startJob = async (label, create) => {
@@ -101,6 +141,11 @@ function App() {
         setJob(j);
         if (j.title) setTitle(j.title);
       });
+      synth.load(finished.result);
+      synth.onEnd = () => {
+        setIsPlaying(false);
+        setCurrentTime(0);
+      };
       setResult(finished.result);
       if (audioRef.current) {
         audioRef.current.src = finished.result.files.original;
@@ -119,7 +164,10 @@ function App() {
   const handleUrlSubmitted = (url) => startJob(url, () => createJobFromUrl(url, options));
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current) setDuration(audioRef.current.duration);
+    const audio = audioRef.current;
+    if (!audio) return;
+    setAudioDuration(audio.duration);
+    audio.playbackRate = playback.speed; // reset by load()
   };
 
   const handleAudioEnded = () => {
@@ -127,27 +175,35 @@ function App() {
     setCurrentTime(0);
   };
 
-  const handlePlayPause = () => {
-    if (!audioRef.current) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
+  const startPlaying = (mode = playback.mode) => {
+    if (mode === 'synth') {
+      synth.play();
+      setIsPlaying(true);
+    } else if (audioRef.current) {
       audioRef.current.play().then(() => setIsPlaying(true)).catch((err) => {
-        console.error("Playback error:", err);
+        if (err.name !== 'AbortError') console.error("Playback error:", err);
       });
     }
   };
 
-  const seekTo = (seconds) => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.max(0, Math.min(duration || seconds, seconds));
-    setCurrentTime(audioRef.current.currentTime);
+  const stopPlaying = () => {
+    synth.pause();
+    audioRef.current?.pause();
+    setIsPlaying(false);
+  };
+
+  const handlePlayPause = () => (isPlaying ? stopPlaying() : startPlaying());
+
+  const seekTo = (seconds, mode = playback.mode) => {
+    const t = Math.max(0, Math.min(duration || seconds, seconds));
+    if (mode === 'synth') synth.seek(t);
+    else if (audioRef.current) audioRef.current.currentTime = t;
+    setCurrentTime(t);
   };
 
   const handleSeek = (fraction) => duration && seekTo(fraction * duration);
-  const handleSkipBack = () => audioRef.current && seekTo(audioRef.current.currentTime - 5);
-  const handleSkipForward = () => audioRef.current && seekTo(audioRef.current.currentTime + 5);
+  const handleSkipBack = () => seekTo(position() - 5);
+  const handleSkipForward = () => seekTo(position() + 5);
 
   const handleUploadNew = () => {
     resetPlayback();
@@ -157,27 +213,38 @@ function App() {
     setError(null);
   };
 
-  const handleModeSwitch = (mode) => {
-    if (mode === playbackMode || !audioRef.current || !result) return;
-    const audio = audioRef.current;
-    const wasPlaying = isPlaying;
-    const position = audio.currentTime;
-    audio.pause();
-    setIsPlaying(false);
-    setPlaybackMode(mode);
-
-    // Keep the same position so you can A/B the transcription against the original.
-    audio.src = mode === 'original' ? result.files.original : result.files.synth;
-    audio.load();
-    audio.addEventListener('loadedmetadata', () => {
-      audio.currentTime = Math.min(position, audio.duration || position);
-      if (wasPlaying) {
-        audio.play().then(() => setIsPlaying(true)).catch((err) => {
-          if (err.name !== 'AbortError') console.error("Playback error after switch:", err);
-        });
-      }
-    }, { once: true });
+  const handlePlaybackChange = (key, value) => {
+    if (key === 'mode' && value !== playback.mode) {
+      // Keep the same position so you can A/B the transcription against the original.
+      const wasPlaying = isPlaying;
+      const t = position();
+      stopPlaying();
+      seekTo(t, value);
+      if (wasPlaying) startPlaying(value);
+    }
+    setPlayback((prev) => {
+      const next = { ...prev, [key]: value };
+      save(PLAYBACK_KEY, next);
+      return next;
+    });
   };
+
+  const handleToggleLoop = () => {
+    if (loopBar !== null) {
+      setLoopBar(null);
+      return;
+    }
+    const index = result.measures.findIndex((m) => currentTime >= m.start && currentTime < m.end);
+    setLoopBar(Math.max(0, index));
+  };
+
+  const handleNoteClick = (visualString, fret) => {
+    const string = 5 - visualString;
+    const open = result.tuning?.open_strings || [40, 45, 50, 55, 59, 64];
+    synth.audition(open[string] + fret, string);
+  };
+
+  const currentBar = result ? result.measures.findIndex((m) => currentTime >= m.start && currentTime < m.end) : -1;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-white/10">
@@ -259,21 +326,6 @@ function App() {
                   <span className="text-zinc-300 font-medium truncate">{title}</span>
                 </div>
 
-                <div className="flex items-center bg-zinc-900/40 rounded-lg p-1 border border-zinc-800/50 shrink-0">
-                  <button
-                    onClick={() => handleModeSwitch('original')}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'original' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    Original
-                  </button>
-                  <button
-                    onClick={() => handleModeSwitch('simulation')}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${playbackMode === 'simulation' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    Tab Preview
-                  </button>
-                </div>
-
                 <button
                   onClick={handleUploadNew}
                   className="text-xs font-medium text-zinc-500 hover:text-white transition-colors uppercase tracking-wider shrink-0"
@@ -282,7 +334,21 @@ function App() {
                 </button>
               </div>
 
-              <TabViewer result={result} currentTime={currentTime} isPlaying={isPlaying} onSeek={seekTo} />
+              <SynthPanel
+                settings={playback}
+                onChange={handlePlaybackChange}
+                loopBar={loopBar}
+                onToggleLoop={handleToggleLoop}
+                currentBar={currentBar}
+              />
+
+              <TabViewer
+                result={result}
+                currentTime={currentTime}
+                isPlaying={isPlaying}
+                onSeek={(t) => seekTo(t)}
+                onNoteClick={handleNoteClick}
+              />
 
               <PlaybackControls
                 isPlaying={isPlaying}
