@@ -3,6 +3,7 @@ import { Download } from 'lucide-react';
 
 // Fallback string names (high to low, top to bottom as displayed)
 const STANDARD_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
+const SLIDE_MARKS = { up: '/', down: '\\' };
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace";
 
 // Render one measure as 6 text rows. Every 16th-note slot gets a column wide
@@ -10,9 +11,9 @@ const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monosp
 function renderMeasure(cells) {
     const rows = Array.from({ length: 6 }, () => '');
     cells.forEach((slot) => {
-        const width = Math.max(1, ...slot.map((f) => (f === null ? 0 : String(f).length))) + 1;
-        slot.forEach((fret, r) => {
-            const val = fret === null ? '' : String(fret);
+        const width = Math.max(1, ...slot.map((f) => (f === null ? 0 : f.length))) + 1;
+        slot.forEach((cell, r) => {
+            const val = cell ?? '';
             rows[r] += val + '-'.repeat(width - val.length);
         });
     });
@@ -34,7 +35,8 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
             const measure = cells[col.measure];
             if (!measure) return;
             Object.entries(col.notes).forEach(([strIdx, fret]) => {
-                measure[col.position][parseInt(strIdx)] = fret;
+                // "/5" = slid up into fret 5, "\3" = slid down into fret 3
+                measure[col.position][parseInt(strIdx)] = (SLIDE_MARKS[col.slides?.[strIdx]] || '') + fret;
             });
         });
         return result.measures.map((m, i) => ({ ...m, rows: renderMeasure(cells[i]) }));
@@ -101,6 +103,11 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
                     <span>{result.tuning ? `${result.tuning.name} (${result.tuning.notes})` : 'Standard tuning'}</span>
                     {result.tuning?.capo > 0 && <span className="text-zinc-300">Capo {result.tuning.capo}</span>}
                     <span>{result.note_count} notes</span>
+                    {result.slide_count > 0 && (
+                        <span title="/ = slide up, \ = slide down">
+                            {result.slide_count} slide{result.slide_count === 1 ? '' : 's'} (<span className="font-mono">/</span> up, <span className="font-mono">\</span> down)
+                        </span>
+                    )}
                     <span>Source: {result.stem}</span>
                 </div>
                 <div className="flex gap-2">

@@ -56,6 +56,21 @@ SLOTS_PER_MEASURE = SLOTS_PER_BEAT * BEATS_PER_MEASURE
 # basic-pitch model output layout
 BP_FPS = 22050 / 256
 BP_MIDI_OFFSET = 21
+CONTOUR_BINS_PER_SEMITONE = 3
+
+# Slide detection (see detect_slides)
+SLIDE_MAX_INTERVAL = 12  # semitones
+SLIDE_MAX_GAP = 0.12  # s between the end of one note and the start of the next
+SLIDE_MAX_OVERLAP = 0.08
+SLIDE_LOOKBACK = 0.3  # s of contour examined before the target note starts
+SLIDE_LOOKAHEAD = 0.1
+SLIDE_MIN_SALIENCE = 0.1
+SLIDE_MID_RATIO = 0.8  # in-between pitch must be this loud relative to both endpoints
+SLIDE_MIN_FRAMES = 3  # ~35 ms of audible glide
+SLIDE_MIN_SPAN = 0.75  # fraction of the in-between pitch range the glide must cross
+SLIDE_MIN_CORR = 0.9  # how steadily it must move toward the target
+SLIDE_STRING_PENALTY = 4.0
+SYNTH_GLIDE_S = 0.08  # fingering cost of splitting a slide across two strings
 
 _model_lock = threading.Lock()
 _bp_model = None
@@ -217,6 +232,7 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
             'position': ev['slot'] % SLOTS_PER_MEASURE,
             'duration': ev['duration'],
             'notes': {str(5 - s): f for s, f in ev['fingering']},
+            'slides': {str(5 - s): d for s, d in ev.get('slides', {}).items()},
         }
         for ev in events if ev['fingering']
     ]
@@ -235,6 +251,7 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
         'measures': measures,
         'tabs': tabs,
         'note_count': sum(len(t['notes']) for t in tabs),
+        'slide_count': sum(len(t['slides']) for t in tabs),
         'stem': stem_used,
         'tuning': {k: tuning[k] for k in ('id', 'name', 'capo', 'labels', 'notes', 'open_strings')},
     }
@@ -310,7 +327,78 @@ def detect_notes(stem_path, onset_threshold=0.7, tuning=None):
         multiple_pitch_bends=False,
         melodia_trick=True,
     )
-    return clean_notes(note_events, model_output['onset'], tuning['low'], tuning['high'])
+    notes = clean_notes(note_events, model_output['onset'], tuning['low'], tuning['high'])
+    detect_slides(notes, model_output['contour'])
+    return notes
+
+
+# ---------------------------------------------------------------------------
+# Slides
+# ---------------------------------------------------------------------------
+
+def _contour_bin(midi):
+    # basic-pitch contour: 3 bins per semitone from A0 (MIDI 21); the middle bin is the semitone centre
+    return (midi - BP_MIDI_OFFSET) * CONTOUR_BINS_PER_SEMITONE + 1
+
+
+def glide_features(contour, a, b):
+    """Describe the pitch movement between note a and the following note b.
+
+    Counts frames where the strongest pitch is strictly *between* the two notes
+    (at least SLIDE_MID_RATIO as loud as either endpoint). When one note simply
+    stops and another starts (re-pick, hammer-on, legato fingering) the
+    endpoints always dominate; during a slide the pitch really passes through
+    the frets in between, in order.
+    Returns (frames, span, direction_corr).
+    """
+    b_a, b_b = _contour_bin(a['pitch']), _contour_bin(b['pitch'])
+    lo, hi = sorted((b_a, b_b))
+    if hi - lo < 6:  # needs at least 2 semitones
+        return 0, 0.0, 0.0
+    f0 = int(max(a['start'] + 0.05, b['start'] - SLIDE_LOOKBACK) * BP_FPS)
+    f1 = min(int((b['start'] + SLIDE_LOOKAHEAD) * BP_FPS), len(contour))
+    if f1 <= f0:
+        return 0, 0.0, 0.0
+
+    window = contour[f0:f1]
+    mid = window[:, lo + 2:hi - 1]  # skip the bins bordering each endpoint
+    ends = np.maximum(window[:, lo - 1:lo + 2].max(axis=1), window[:, hi - 1:hi + 2].max(axis=1))
+    peak = mid.max(axis=1)
+    gliding = (peak >= SLIDE_MIN_SALIENCE) & (peak >= SLIDE_MID_RATIO * ends)
+    frames = np.nonzero(gliding)[0]
+    if frames.size == 0:
+        return 0, 0.0, 0.0
+
+    pos = mid.argmax(axis=1)[gliding]
+    span = (np.ptp(pos) + 1) / mid.shape[1]
+    corr = 0.0
+    if frames.size >= 2 and np.ptp(pos):
+        corr = float(np.corrcoef(frames, pos)[0, 1]) * (1 if b_b > b_a else -1)
+    return int(frames.size), float(span), corr
+
+
+def detect_slides(notes, contour):
+    """Mark notes reached by sliding: n['slide_from'] = pitch slid from."""
+    candidates = []
+    for b in notes:
+        for a in notes:
+            interval = abs(b['pitch'] - a['pitch'])
+            legato = -SLIDE_MAX_OVERLAP <= b['start'] - a['end'] <= SLIDE_MAX_GAP
+            if a is b or not legato or a['start'] > b['start'] - 0.05 or not 2 <= interval <= SLIDE_MAX_INTERVAL:
+                continue
+            frames, span, corr = glide_features(contour, a, b)
+            if frames >= SLIDE_MIN_FRAMES and span >= SLIDE_MIN_SPAN and corr >= SLIDE_MIN_CORR:
+                candidates.append((interval, -span, id(a), id(b), a, b))
+
+    # One source per target and vice versa; prefer the smallest interval so a
+    # power-chord slide pairs root->root and fifth->fifth, not root->fifth.
+    used_a, used_b = set(), set()
+    for _, _, ia, ib, a, b in sorted(candidates, key=lambda c: c[:2]):
+        if ia in used_a or ib in used_b:
+            continue
+        used_a.add(ia)
+        used_b.add(ib)
+        b['slide_from'] = a['pitch']
 
 
 def clean_notes(note_events, onset_probs, low=OPEN_STRINGS[0], high=OPEN_STRINGS[-1] + MAX_FRET):
@@ -511,12 +599,22 @@ def _static_cost(fingering):
     return cost
 
 
-def _transition_cost(a, b, gap):
+def _transition_cost(a, b, gap, slides=(), open_strings=OPEN_STRINGS):
     pa, pb = _hand_position(a), _hand_position(b)
     move = abs(pa - pb) if pa is not None and pb is not None else 0.0
     cost = 0.6 * move / (1.0 + 2.0 * gap)  # shifting is easier with more time
     if len(a) == 1 and len(b) == 1:
         cost += 0.15 * abs(a[0][0] - b[0][0])
+    if slides:
+        # A slide only works if both notes are on the same string; moving
+        # along the string is what the slide itself does, so don't charge for it.
+        a_strings = {open_strings[s] + f: s for s, f in a}
+        b_strings = {open_strings[s] + f: s for s, f in b}
+        for from_pitch, to_pitch in slides:
+            if from_pitch in a_strings and a_strings[from_pitch] == b_strings.get(to_pitch):
+                cost -= 0.6 * move / (1.0 + 2.0 * gap) / len(slides)
+            else:
+                cost += SLIDE_STRING_PENALTY
     return cost
 
 
@@ -542,7 +640,9 @@ def assign_fingerings(events, tuning, max_candidates=60):
     for i in range(1, len(events)):
         gap = max(0.0, events[i]['time'] - events[i - 1]['time'] - events[i - 1]['duration'])
         static = np.array([_static_cost(c) for c in options[i]])
-        trans = np.array([[_transition_cost(a, b, gap) for a in options[i - 1]] for b in options[i]])
+        slides = [(n['slide_from'], n['pitch']) for n in events[i]['notes'] if 'slide_from' in n]
+        trans = np.array([[_transition_cost(a, b, gap, slides, tuning['open_strings']) for a in options[i - 1]]
+                          for b in options[i]])
         total = trans + costs[-1][None, :]
         back.append(total.argmin(axis=1))
         costs.append(total.min(axis=1) + static)
@@ -552,6 +652,23 @@ def assign_fingerings(events, tuning, max_candidates=60):
         events[i]['fingering'] = options[i][choice]
         if i > 0:
             choice = int(back[i - 1][choice])
+    link_slides(events, tuning['open_strings'])
+
+
+def link_slides(events, open_strings):
+    """Set ev['slides'] = {string: 'up' | 'down'} where a detected slide ended up
+    playable: the source note is on the same string in the previous event."""
+    for prev, ev in zip(events, events[1:]):
+        ev['slides'] = {}
+        prev_frets = dict(prev['fingering'])
+        for n in ev['notes']:
+            if 'slide_from' not in n:
+                continue
+            for string, fret in ev['fingering']:
+                if open_strings[string] + fret == n['pitch'] and prev_frets.get(string) == n['slide_from'] - open_strings[string]:
+                    ev['slides'][string] = 'up' if n['pitch'] > n['slide_from'] else 'down'
+    if events:
+        events[0]['slides'] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -570,24 +687,30 @@ def build_measures(events, grid):
     return measures
 
 
+SLIDE_MARKS = {'up': '/', 'down': '\\'}
+
+
 def render_ascii_tab(tabs, num_measures, tempo, tuning, measures_per_line=4):
     names = tuning['labels']
-    width = max(len(n) for n in names)
+    label_width = max(len(n) for n in names)
     cells = [[[None] * 6 for _ in range(SLOTS_PER_MEASURE)] for _ in range(num_measures)]
     for t in tabs:
         if t['measure'] < num_measures:
             for s, fret in t['notes'].items():
-                cells[t['measure']][t['position']][int(s)] = fret
+                cells[t['measure']][t['position']][int(s)] = SLIDE_MARKS.get(t['slides'].get(s), '') + str(fret)
 
     capo = f"   Capo: fret {tuning['capo']}" if tuning['capo'] else ''
-    out = [f"Tempo: ~{round(tempo)} BPM   Time: 4/4   Tuning: {tuning['name']} ({tuning['notes']}){capo}", ""]
+    out = [f"Tempo: ~{round(tempo)} BPM   Time: 4/4   Tuning: {tuning['name']} ({tuning['notes']}){capo}"]
+    if any(t['slides'] for t in tabs):
+        out.append("/ = slide up   \\ = slide down")
+    out.append("")
     for start in range(0, num_measures, measures_per_line):
-        rows = [f"{n.ljust(width)}|" for n in names]
+        rows = [f"{n.ljust(label_width)}|" for n in names]
         for m in range(start, min(start + measures_per_line, num_measures)):
             for slot in cells[m]:
-                width = max([len(str(f)) for f in slot if f is not None] + [1]) + 1
+                width = max([len(f) for f in slot if f is not None] + [1]) + 1
                 for r in range(6):
-                    val = '' if slot[r] is None else str(slot[r])
+                    val = slot[r] or ''
                     rows[r] += val + '-' * (width - len(val))
             rows = [row + '|' for row in rows]
         out.extend(rows)
@@ -596,23 +719,59 @@ def render_ascii_tab(tabs, num_measures, tempo, tuning, measures_per_line=4):
 
 
 def write_synth(events, duration, path, tuning, sr=SR):
-    """Render the tab as a simple plucked-string preview."""
-    y = np.zeros(int((duration + 2) * sr))
+    """Render the tab as a simple plucked-string preview.
+
+    Each string plays one note at a time (a new note cuts off the previous one
+    on that string, like a real guitar), and slides glide in pitch instead of
+    being re-plucked.
+    """
+    notes = []  # (string, start, length, midi, slide_from_midi)
     for ev in events:
         for string, fret in ev['fingering']:
-            freq = librosa.midi_to_hz(tuning['open_strings'][string] + fret)
             length = min(max(ev['duration'], 0.25) + 0.4, 3.0)
+            midi = tuning['open_strings'][string] + fret
+            # link_slides guarantees the previous note on this string is the slide's source
+            source = _previous_pitch(notes, string, midi) if string in ev.get('slides', {}) else None
+            notes.append((string, ev['time'], length, midi, source))
+
+    by_string = {}
+    for n in notes:
+        by_string.setdefault(n[0], []).append(n)
+
+    y = np.zeros(int((duration + 2) * sr))
+    for string_notes in by_string.values():
+        string_notes.sort(key=lambda n: n[1])
+        for i, (_, start_t, length, midi, source) in enumerate(string_notes):
+            if i + 1 < len(string_notes):
+                length = min(length, string_notes[i + 1][1] - start_t + 0.01)
+            if length <= 0:
+                continue
             t = np.arange(int(length * sr)) / sr
-            env = np.exp(-3.0 * t) * np.minimum(1.0, t / 0.005)
-            env *= np.clip((length - t) / 0.05, 0, 1)  # release
-            tone = sum(np.sin(2 * np.pi * k * freq * t) * np.exp(-k * 1.2 * t) / k for k in range(1, 6))
-            start = int(ev['time'] * sr)
+            pitch = np.full(t.shape, float(midi))
+            if source is not None:
+                glide = t < SYNTH_GLIDE_S
+                pitch[glide] = source + (midi - source) * t[glide] / SYNTH_GLIDE_S
+                attack = np.minimum(1.0, 0.5 + t / 0.02)  # no fresh pluck
+                env = np.exp(-3.0 * (t + 0.15)) * attack
+            else:
+                env = np.exp(-3.0 * t) * np.minimum(1.0, t / 0.005)
+            env *= np.clip((length - t) / 0.03, 0, 1)  # release
+            phase = 2 * np.pi * np.cumsum(librosa.midi_to_hz(pitch)) / sr
+            tone = sum(np.sin(k * phase) * np.exp(-k * 1.2 * t) / k for k in range(1, 6))
+            start = int(start_t * sr)
             end = min(start + len(t), len(y))
             y[start:end] += tone[:end - start] * env[:end - start]
     peak = np.max(np.abs(y))
     if peak > 0:
         y = y / peak * 0.8
     wavfile.write(path, sr, np.int16(y * 32767))
+
+
+def _previous_pitch(notes, string, default):
+    for s, _, _, midi, _ in reversed(notes):
+        if s == string:
+            return midi
+    return default
 
 
 def write_midi(events, tempo, path, tuning):
