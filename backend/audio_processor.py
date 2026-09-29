@@ -28,10 +28,26 @@ MAX_DURATION_S = 12 * 60
 
 # Standard tuning as MIDI note numbers, low E (index 0) -> high e (index 5)
 OPEN_STRINGS = [40, 45, 50, 55, 59, 64]
-MAX_FRET = 22
+MAX_FRET = 22  # counted from the nut
 MAX_SPAN = 4  # widest fret stretch allowed within one chord shape
-GUITAR_LOW = OPEN_STRINGS[0]
-GUITAR_HIGH = OPEN_STRINGS[-1] + MAX_FRET
+MAX_CAPO = 12
+
+# Presets, strings listed low -> high as MIDI note numbers
+TUNINGS = {
+    'standard': ('Standard', OPEN_STRINGS),
+    'drop_d': ('Drop D', [38, 45, 50, 55, 59, 64]),
+    'half_down': ('Half step down', [39, 44, 49, 54, 58, 63]),
+    'full_down': ('Whole step down', [38, 43, 48, 53, 57, 62]),
+    'drop_c_sharp': ('Drop C#', [37, 44, 49, 54, 58, 63]),
+    'drop_c': ('Drop C', [36, 43, 48, 53, 57, 62]),
+    'open_g': ('Open G', [38, 43, 50, 55, 59, 62]),
+    'open_d': ('Open D', [38, 45, 50, 54, 57, 62]),
+    'open_e': ('Open E', [40, 47, 52, 56, 59, 64]),
+    'dadgad': ('DADGAD', [38, 45, 50, 55, 57, 62]),
+}
+SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
+MIXED_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B']
 
 SLOTS_PER_BEAT = 4  # 16th-note grid
 BEATS_PER_MEASURE = 4
@@ -48,6 +64,83 @@ _demucs_model = None
 
 class ProcessingError(Exception):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Tuning & capo
+# ---------------------------------------------------------------------------
+
+def _string_names(strings):
+    """Spell open-string names the way guitarists write them: a tuning rooted on
+    Eb/Ab/Bb uses flats (Eb Ab Db Gb Bb Eb), one rooted on C#/F# uses sharps."""
+    root = strings[0] % 12
+    table = FLAT_NAMES if root in (3, 8, 10) else SHARP_NAMES if root in (1, 6) else MIXED_NAMES
+    return [table[m % 12] for m in strings]
+
+
+def parse_custom_tuning(text):
+    """Parse six note names, low -> high, e.g. "D A D G B E" or "C2 G2 C3 F3 A3 D4".
+
+    Notes without an octave get the octave closest to the matching string in
+    standard tuning.
+    """
+    tokens = [t for t in text.replace(',', ' ').split() if t]
+    if len(tokens) != 6:
+        raise ProcessingError("A custom tuning needs exactly 6 notes, lowest string first (e.g. D A D G B E).")
+    strings = []
+    for token, reference in zip(tokens, OPEN_STRINGS):
+        name = token.strip().replace('♯', '#').replace('♭', 'b')
+        name = name[0].upper() + name[1:]
+        try:
+            if name[-1].isdigit():
+                midi = int(librosa.note_to_midi(name))
+            else:
+                pc = int(librosa.note_to_midi(name + '4')) % 12
+                midi = min((pc + 12 * o for o in range(1, 8)), key=lambda m: abs(m - reference))
+        except Exception:
+            raise ProcessingError(f"'{token}' isn't a note name. Use letters like E, F#, Bb.")
+        if abs(midi - reference) > 12:
+            raise ProcessingError(f"'{token}' is too far from a normal guitar string pitch.")
+        strings.append(midi)
+    return strings
+
+
+def resolve_tuning(tuning='standard', capo=0, custom=None):
+    """Validate the user's tuning/capo choice and return a tuning dict used by the pipeline."""
+    try:
+        capo = int(capo or 0)
+    except (TypeError, ValueError):
+        raise ProcessingError("Capo must be a fret number.")
+    if not 0 <= capo <= MAX_CAPO:
+        raise ProcessingError(f"Capo must be between 0 and {MAX_CAPO}.")
+
+    if tuning == 'custom':
+        name, strings = 'Custom', parse_custom_tuning(custom or '')
+    elif tuning in TUNINGS:
+        name, strings = TUNINGS[tuning]
+    else:
+        raise ProcessingError(f"Unknown tuning '{tuning}'.")
+
+    # With a capo, frets are written relative to the capo (0 = capo'd string).
+    sounding = [m + capo for m in strings]
+    names = _string_names(strings)
+    labels = names[:-1] + [names[-1].lower()]  # lowercase high string, like the classic "e"
+    return {
+        'id': tuning,
+        'name': name,
+        'capo': capo,
+        'strings': list(strings),  # open strings without capo, low -> high
+        'open_strings': sounding,  # what each string sounds at fret 0 of the tab
+        'max_fret': MAX_FRET - capo,
+        'low': min(sounding),
+        'high': max(sounding) + MAX_FRET - capo,
+        'labels': labels[::-1],  # high -> low, as displayed top to bottom
+        'notes': ' '.join(names),
+    }
+
+
+def tuning_presets():
+    return [{'id': k, 'name': n, 'notes': ' '.join(_string_names(v))} for k, (n, v) in TUNINGS.items()]
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +180,9 @@ def _get_demucs():
 # Pipeline
 # ---------------------------------------------------------------------------
 
-def transcribe(source_path, job_dir, separate=True, progress=lambda stage, frac: None):
+def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda stage, frac: None):
     """Run the full pipeline. Writes artifacts into job_dir and returns the result dict."""
+    tuning = tuning or resolve_tuning()
     progress('decoding', 0.05)
     mix_path = decode_audio(source_path, job_dir)
     mix, _ = librosa.load(mix_path, sr=SR, mono=True)
@@ -106,13 +200,13 @@ def transcribe(source_path, job_dir, separate=True, progress=lambda stage, frac:
     progress('transcribing', 0.6)
     stem_path = os.path.join(job_dir, 'stem.wav')
     sf.write(stem_path, target, SR)
-    notes = detect_notes(stem_path)
+    notes = detect_notes(stem_path, tuning=tuning)
 
     progress('arranging', 0.85)
     tempo, grid = beat_grid(mix, duration, notes)
     events = quantize(notes, grid)
     events, grid = trim_leading_measures(events, grid)
-    assign_fingerings(events)
+    assign_fingerings(events, tuning)
 
     measures = build_measures(events, grid)
     tabs = [
@@ -128,10 +222,10 @@ def transcribe(source_path, job_dir, separate=True, progress=lambda stage, frac:
     ]
 
     progress('rendering', 0.95)
-    write_synth(events, duration, os.path.join(job_dir, 'synth.wav'))
-    write_midi(events, tempo, os.path.join(job_dir, 'transcription.mid'))
+    write_synth(events, duration, os.path.join(job_dir, 'synth.wav'), tuning)
+    write_midi(events, tempo, os.path.join(job_dir, 'transcription.mid'), tuning)
     with open(os.path.join(job_dir, 'tab.txt'), 'w') as f:
-        f.write(render_ascii_tab(tabs, len(measures), tempo))
+        f.write(render_ascii_tab(tabs, len(measures), tempo, tuning))
 
     return {
         'duration': duration,
@@ -142,6 +236,7 @@ def transcribe(source_path, job_dir, separate=True, progress=lambda stage, frac:
         'tabs': tabs,
         'note_count': sum(len(t['notes']) for t in tabs),
         'stem': stem_used,
+        'tuning': {k: tuning[k] for k in ('id', 'name', 'capo', 'labels', 'notes', 'open_strings')},
     }
 
 
@@ -200,7 +295,8 @@ def isolate_guitar(mix_path):
     return librosa.resample(signal, orig_sr=MIX_SR, target_sr=SR), desc
 
 
-def detect_notes(stem_path, onset_threshold=0.7):
+def detect_notes(stem_path, onset_threshold=0.7, tuning=None):
+    tuning = tuning or resolve_tuning()
     from basic_pitch.inference import predict
 
     model_output, _, note_events = predict(
@@ -209,19 +305,19 @@ def detect_notes(stem_path, onset_threshold=0.7):
         onset_threshold=onset_threshold,
         frame_threshold=0.3,
         minimum_note_length=80,
-        minimum_frequency=librosa.midi_to_hz(GUITAR_LOW - 0.5),
-        maximum_frequency=librosa.midi_to_hz(GUITAR_HIGH + 0.5),
+        minimum_frequency=librosa.midi_to_hz(tuning['low'] - 0.5),
+        maximum_frequency=librosa.midi_to_hz(tuning['high'] + 0.5),
         multiple_pitch_bends=False,
         melodia_trick=True,
     )
-    return clean_notes(note_events, model_output['onset'])
+    return clean_notes(note_events, model_output['onset'], tuning['low'], tuning['high'])
 
 
-def clean_notes(note_events, onset_probs):
+def clean_notes(note_events, onset_probs, low=OPEN_STRINGS[0], high=OPEN_STRINGS[-1] + MAX_FRET):
     notes = [
         {'start': float(s), 'end': float(e), 'pitch': int(p), 'amp': float(a)}
         for s, e, p, a, _ in note_events
-        if GUITAR_LOW <= p <= GUITAR_HIGH
+        if low <= p <= high
     ]
 
     def onset_strength(n):
@@ -377,16 +473,16 @@ def trim_leading_measures(events, grid):
 # Fingering: pick string/fret for every note, globally, via Viterbi
 # ---------------------------------------------------------------------------
 
-def _candidates(pitches):
+def _candidates(pitches, open_strings, max_fret):
     results = []
 
     def rec(i, used, assign, lo, hi):
         if i == len(pitches):
             results.append(tuple(assign))
             return
-        for s, open_pitch in enumerate(OPEN_STRINGS):
+        for s, open_pitch in enumerate(open_strings):
             fret = pitches[i] - open_pitch
-            if s in used or not 0 <= fret <= MAX_FRET:
+            if s in used or not 0 <= fret <= max_fret:
                 continue
             nlo, nhi = (min(lo, fret), max(hi, fret)) if fret > 0 else (lo, hi)
             if fret > 0 and nhi - nlo > MAX_SPAN:
@@ -424,14 +520,14 @@ def _transition_cost(a, b, gap):
     return cost
 
 
-def assign_fingerings(events, max_candidates=60):
+def assign_fingerings(events, tuning, max_candidates=60):
     """Set ev['fingering'] = tuple of (string_idx, fret) for every event."""
     options = []
     for ev in events:
         chord = list(ev['notes'])
         cands = []
         while chord and not cands:
-            cands = _candidates([n['pitch'] for n in chord])
+            cands = _candidates([n['pitch'] for n in chord], tuning['open_strings'], tuning['max_fret'])
             if not cands:
                 chord.pop()  # unplayable: drop the quietest note and retry
         ev['notes'] = chord
@@ -474,17 +570,19 @@ def build_measures(events, grid):
     return measures
 
 
-def render_ascii_tab(tabs, num_measures, tempo, measures_per_line=4):
-    names = ['e', 'B', 'G', 'D', 'A', 'E']
+def render_ascii_tab(tabs, num_measures, tempo, tuning, measures_per_line=4):
+    names = tuning['labels']
+    width = max(len(n) for n in names)
     cells = [[[None] * 6 for _ in range(SLOTS_PER_MEASURE)] for _ in range(num_measures)]
     for t in tabs:
         if t['measure'] < num_measures:
             for s, fret in t['notes'].items():
                 cells[t['measure']][t['position']][int(s)] = fret
 
-    out = [f"Tempo: ~{round(tempo)} BPM   Time: 4/4   Tuning: E A D G B E", ""]
+    capo = f"   Capo: fret {tuning['capo']}" if tuning['capo'] else ''
+    out = [f"Tempo: ~{round(tempo)} BPM   Time: 4/4   Tuning: {tuning['name']} ({tuning['notes']}){capo}", ""]
     for start in range(0, num_measures, measures_per_line):
-        rows = [f"{n}|" for n in names]
+        rows = [f"{n.ljust(width)}|" for n in names]
         for m in range(start, min(start + measures_per_line, num_measures)):
             for slot in cells[m]:
                 width = max([len(str(f)) for f in slot if f is not None] + [1]) + 1
@@ -497,12 +595,12 @@ def render_ascii_tab(tabs, num_measures, tempo, measures_per_line=4):
     return '\n'.join(out)
 
 
-def write_synth(events, duration, path, sr=SR):
+def write_synth(events, duration, path, tuning, sr=SR):
     """Render the tab as a simple plucked-string preview."""
     y = np.zeros(int((duration + 2) * sr))
     for ev in events:
         for string, fret in ev['fingering']:
-            freq = librosa.midi_to_hz(OPEN_STRINGS[string] + fret)
+            freq = librosa.midi_to_hz(tuning['open_strings'][string] + fret)
             length = min(max(ev['duration'], 0.25) + 0.4, 3.0)
             t = np.arange(int(length * sr)) / sr
             env = np.exp(-3.0 * t) * np.minimum(1.0, t / 0.005)
@@ -517,7 +615,7 @@ def write_synth(events, duration, path, sr=SR):
     wavfile.write(path, sr, np.int16(y * 32767))
 
 
-def write_midi(events, tempo, path):
+def write_midi(events, tempo, path, tuning):
     import pretty_midi
 
     pm = pretty_midi.PrettyMIDI(initial_tempo=tempo)
@@ -525,7 +623,7 @@ def write_midi(events, tempo, path):
     for ev in events:
         amps = {n['pitch']: n['amp'] for n in ev['notes']}
         for string, fret in ev['fingering']:
-            pitch = OPEN_STRINGS[string] + fret
+            pitch = tuning['open_strings'][string] + fret
             velocity = int(np.clip(40 + amps.get(pitch, 0.5) * 87, 1, 127))
             guitar.notes.append(pretty_midi.Note(
                 velocity=velocity, pitch=pitch, start=ev['time'], end=ev['time'] + max(ev['duration'], 0.05)))

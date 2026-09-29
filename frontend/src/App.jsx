@@ -15,12 +15,25 @@ const STAGE_LABELS = {
   rendering: 'Writing tab, MIDI and preview...',
 };
 
+const DEFAULT_OPTIONS = { separate: true, tuning: 'standard', capo: 0, customTuning: '' };
+const OPTIONS_KEY = 'guitar-options';
+
+function loadOptions() {
+  try {
+    return { ...DEFAULT_OPTIONS, ...JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}') };
+  } catch {
+    return DEFAULT_OPTIONS;
+  }
+}
+
 function App() {
   const [title, setTitle] = useState(null);
   const [job, setJob] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [separate, setSeparate] = useState(true);
+  const [options, setOptions] = useState(loadOptions);
+  const [tunings, setTunings] = useState([{ id: 'standard', name: 'Standard', notes: 'E A D G B E' }]);
+  const [maxCapo, setMaxCapo] = useState(12);
   const [separationAvailable, setSeparationAvailable] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -32,9 +45,25 @@ function App() {
 
   useEffect(() => {
     getHealth()
-      .then((h) => setSeparationAvailable(h.separation_available))
+      .then((h) => {
+        setSeparationAvailable(h.separation_available);
+        if (h.tunings) setTunings(h.tunings);
+        if (h.max_capo) setMaxCapo(h.max_capo);
+      })
       .catch(() => setError("Can't reach the backend. Start it with: cd backend && .venv/bin/python app.py"));
   }, []);
+
+  const handleOptionChange = (key, value) => {
+    setOptions((prev) => {
+      const next = { ...prev, [key]: value };
+      try {
+        localStorage.setItem(OPTIONS_KEY, JSON.stringify(next));
+      } catch {
+        // storage unavailable (private mode) - options just won't persist
+      }
+      return next;
+    });
+  };
 
   // Keep the playhead smooth: timeupdate only fires ~4x per second.
   useEffect(() => {
@@ -86,8 +115,8 @@ function App() {
     }
   };
 
-  const handleFileSelected = (file) => startJob(file.name, () => createJobFromFile(file, separate));
-  const handleUrlSubmitted = (url) => startJob(url, () => createJobFromUrl(url, separate));
+  const handleFileSelected = (file) => startJob(file.name, () => createJobFromFile(file, options));
+  const handleUrlSubmitted = (url) => startJob(url, () => createJobFromUrl(url, options));
 
   const handleLoadedMetadata = () => {
     if (audioRef.current) setDuration(audioRef.current.duration);
@@ -191,8 +220,10 @@ function App() {
             <UploadSection
               onFileSelected={handleFileSelected}
               onUrlSubmitted={handleUrlSubmitted}
-              separate={separate}
-              onSeparateChange={setSeparate}
+              options={options}
+              onOptionChange={handleOptionChange}
+              tunings={tunings}
+              maxCapo={maxCapo}
               separationAvailable={separationAvailable}
               error={error}
             />

@@ -106,7 +106,7 @@ def report(name, hits, n_det, n_true):
 
 def run(onset_threshold, workdir):
     original = ap.detect_notes
-    ap.detect_notes = lambda path: original(path, onset_threshold=onset_threshold)
+    ap.detect_notes = lambda path, **kw: original(path, onset_threshold=onset_threshold, **kw)
     scores = []
     try:
         os.makedirs(CACHE, exist_ok=True)

@@ -10,7 +10,7 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from audio_processor import ProcessingError, separation_available, transcribe
+from audio_processor import MAX_CAPO, ProcessingError, resolve_tuning, separation_available, transcribe, tuning_presets
 from sources import download_audio, validate_url
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -56,7 +56,7 @@ def run_job(job_id):
         def progress(stage, frac):
             update_job(job_id, stage=stage, progress=frac)
 
-        result = transcribe(source, job_dir, separate=job['separate'], progress=progress)
+        result = transcribe(source, job_dir, separate=job['separate'], tuning=job['_tuning'], progress=progress)
         base = f"/api/jobs/{job_id}/files"
         result['files'] = {
             'original': f"{base}/original.mp3",
@@ -80,7 +80,12 @@ def home():
 
 @app.route('/api/health')
 def health():
-    return jsonify({'ok': True, 'separation_available': separation_available()})
+    return jsonify({
+        'ok': True,
+        'separation_available': separation_available(),
+        'tunings': tuning_presets(),
+        'max_capo': MAX_CAPO,
+    })
 
 
 @app.route('/api/jobs', methods=['POST'])
@@ -88,6 +93,13 @@ def create_job():
     job_id = uuid.uuid4().hex[:12]
     job_dir = os.path.join(JOBS_DIR, job_id)
     url, source, title = None, None, None
+
+    # Uploads send multipart form fields, links send JSON; options are read from either.
+    options = request.form if 'file' in request.files else (request.get_json(silent=True) or {})
+    try:
+        tuning = resolve_tuning(options.get('tuning', 'standard'), options.get('capo', 0), options.get('custom_tuning'))
+    except ProcessingError as e:
+        return jsonify({'error': str(e)}), 400
 
     if 'file' in request.files:
         file = request.files['file']
@@ -99,22 +111,22 @@ def create_job():
         source = os.path.join(job_dir, f"source.{ext}")
         file.save(source)
         title = file.filename
-        separate = request.form.get('separate', 'true') == 'true'
+        separate = options.get('separate', 'true') == 'true'
     else:
-        data = request.get_json(silent=True) or {}
         try:
-            url = validate_url(data.get('url', ''))
+            url = validate_url(options.get('url', ''))
         except ProcessingError as e:
             return jsonify({'error': str(e)}), 400
         os.makedirs(job_dir)
         title = url
-        separate = bool(data.get('separate', True))
+        separate = bool(options.get('separate', True))
 
     with jobs_lock:
         jobs[job_id] = {
             'id': job_id, 'status': 'running', 'stage': 'queued', 'progress': 0.0,
             'title': title, 'separate': separate and separation_available(), 'error': None, 'result': None,
-            '_dir': job_dir, '_source': source, '_url': url,
+            'tuning': tuning['name'], 'capo': tuning['capo'],
+            '_dir': job_dir, '_source': source, '_url': url, '_tuning': tuning,
         }
     executor.submit(run_job, job_id)
     return jsonify(job_view(jobs[job_id])), 202

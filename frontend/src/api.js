@@ -18,18 +18,23 @@ export async function getHealth() {
   return parse(await fetch(`${API}/health`));
 }
 
-export async function createJobFromFile(file, separate) {
+// options: { separate, tuning, capo, customTuning }
+function jobOptions({ separate, tuning, capo, customTuning }) {
+  return { separate, tuning, capo, custom_tuning: tuning === 'custom' ? customTuning : '' };
+}
+
+export async function createJobFromFile(file, options) {
   const form = new FormData();
   form.append('file', file);
-  form.append('separate', String(separate));
+  Object.entries(jobOptions(options)).forEach(([k, v]) => form.append(k, String(v)));
   return parse(await fetch(`${API}/jobs`, { method: 'POST', body: form }));
 }
 
-export async function createJobFromUrl(url, separate) {
+export async function createJobFromUrl(url, options) {
   return parse(await fetch(`${API}/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, separate }),
+    body: JSON.stringify({ url, ...jobOptions(options) }),
   }));
 }
 

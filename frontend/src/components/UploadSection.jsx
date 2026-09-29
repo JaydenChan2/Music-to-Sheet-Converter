@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileAudio, AlertCircle, Link2, ArrowRight } from 'lucide-react';
+import { Upload, FileAudio, AlertCircle, Link2, ArrowRight, Guitar } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -10,7 +10,64 @@ function cn(...inputs) {
 
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'];
 
-const UploadSection = ({ onFileSelected, onUrlSubmitted, separate, onSeparateChange, separationAvailable, error }) => {
+const SELECT_CLASS = "w-full rounded-lg bg-zinc-900/60 border border-zinc-800 focus:border-zinc-500 outline-none px-3 py-2 text-sm text-zinc-200";
+
+const GuitarSettings = ({ options, onOptionChange, tunings, maxCapo }) => (
+    <div className="rounded-2xl border border-zinc-800/70 bg-zinc-900/20 p-5 space-y-4">
+        <div className="flex items-center gap-2 text-sm text-zinc-300">
+            <Guitar size={16} className="text-zinc-500" />
+            Your guitar
+            <span className="text-zinc-600 text-xs">How is the guitar in the recording set up?</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="space-y-1.5">
+                <span className="block text-xs uppercase tracking-wider text-zinc-500">Tuning</span>
+                <select
+                    value={options.tuning}
+                    onChange={(e) => onOptionChange('tuning', e.target.value)}
+                    className={SELECT_CLASS}
+                >
+                    {tunings.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name} ({t.notes})</option>
+                    ))}
+                    <option value="custom">Custom...</option>
+                </select>
+            </label>
+            <label className="space-y-1.5">
+                <span className="block text-xs uppercase tracking-wider text-zinc-500">Capo</span>
+                <select
+                    value={options.capo}
+                    onChange={(e) => onOptionChange('capo', Number(e.target.value))}
+                    className={SELECT_CLASS}
+                >
+                    <option value={0}>No capo</option>
+                    {Array.from({ length: maxCapo }, (_, i) => i + 1).map((fret) => (
+                        <option key={fret} value={fret}>Capo on fret {fret}</option>
+                    ))}
+                </select>
+            </label>
+        </div>
+        {options.tuning === 'custom' && (
+            <label className="block space-y-1.5">
+                <span className="block text-xs uppercase tracking-wider text-zinc-500">Custom tuning (lowest string first)</span>
+                <input
+                    type="text"
+                    value={options.customTuning}
+                    onChange={(e) => onOptionChange('customTuning', e.target.value)}
+                    placeholder="e.g. D A D G B E  or  C G C F A D"
+                    className={SELECT_CLASS + " placeholder:text-zinc-600"}
+                />
+            </label>
+        )}
+        {options.capo > 0 && (
+            <p className="text-xs text-zinc-500">Frets will be written relative to the capo (0 = capo'd string), as in most tabs.</p>
+        )}
+    </div>
+);
+
+const CUSTOM_TUNING_PATTERN = /^\s*([A-Ga-g][#b♯♭]?\d?[\s,]+){5}[A-Ga-g][#b♯♭]?\d?\s*$/;
+
+const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange, tunings, maxCapo, separationAvailable, error }) => {
     const [isDragging, setIsDragging] = useState(false);
     const [localError, setLocalError] = useState(null);
     const [url, setUrl] = useState('');
@@ -38,9 +95,16 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, separate, onSeparateCha
         return null;
     };
 
+    const validateOptions = () => {
+        if (options.tuning === 'custom' && !CUSTOM_TUNING_PATTERN.test(options.customTuning)) {
+            return "Enter 6 notes for the custom tuning, lowest string first (e.g. D A D G B E).";
+        }
+        return null;
+    };
+
     const acceptFile = (file) => {
         setLocalError(null);
-        const validationError = validateFile(file);
+        const validationError = validateOptions() || validateFile(file);
         if (validationError) {
             setLocalError(validationError);
         } else {
@@ -71,6 +135,11 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, separate, onSeparateCha
             setLocalError("Please enter a valid http(s) link.");
             return;
         }
+        const optionsError = validateOptions();
+        if (optionsError) {
+            setLocalError(optionsError);
+            return;
+        }
         onUrlSubmitted(trimmed);
     };
 
@@ -82,6 +151,8 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, separate, onSeparateCha
                 transition={{ duration: 0.4 }}
                 className="space-y-6"
             >
+                <GuitarSettings options={options} onOptionChange={onOptionChange} tunings={tunings} maxCapo={maxCapo} />
+
                 <div
                     className={cn(
                         "relative cursor-pointer overflow-hidden rounded-2xl transition-all duration-300 ease-out",
@@ -156,9 +227,9 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, separate, onSeparateCha
                 <label className={cn("flex items-start gap-3 text-sm select-none", separationAvailable ? "cursor-pointer" : "opacity-50")}>
                     <input
                         type="checkbox"
-                        checked={separate && separationAvailable}
+                        checked={options.separate && separationAvailable}
                         disabled={!separationAvailable}
-                        onChange={(e) => onSeparateChange(e.target.checked)}
+                        onChange={(e) => onOptionChange('separate', e.target.checked)}
                         className="mt-0.5 accent-white"
                     />
                     <span>

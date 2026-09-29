@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 
-// Standard guitar string names (high to low, top to bottom as displayed)
-const STRING_NAMES = ['e', 'B', 'G', 'D', 'A', 'E'];
+// Fallback string names (high to low, top to bottom as displayed)
+const STANDARD_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace";
 
 // Render one measure as 6 text rows. Every 16th-note slot gets a column wide
@@ -57,20 +57,21 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
     const lines = useMemo(() => {
         const out = [];
         let line = [];
-        let width = 3; // "e |"
+        const labelChars = 2 + Math.max(...(result?.tuning?.labels || STANDARD_LABELS).map((l) => l.length));
+        let width = labelChars;
         measures.forEach((m) => {
             const w = m.rows[0].length;
             if (line.length && width + w > availableChars) {
                 out.push(line);
                 line = [];
-                width = 3;
+                width = labelChars;
             }
             line.push(m);
             width += w;
         });
         if (line.length) out.push(line);
         return out;
-    }, [measures, availableChars]);
+    }, [measures, availableChars, result]);
 
     const activeIndex = measures.findIndex((m) => currentTime >= m.start && currentTime < m.end);
 
@@ -79,6 +80,9 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
             activeRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
     }, [activeIndex, isPlaying]);
+
+    const labels = result?.tuning?.labels || STANDARD_LABELS;
+    const labelWidth = Math.max(...labels.map((l) => l.length));
 
     if (!result) {
         return (
@@ -94,7 +98,8 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
                 <div className="flex flex-wrap gap-x-5 gap-y-1">
                     <span>~{Math.round(result.tempo)} BPM</span>
                     <span>{result.time_signature.join('/')}</span>
-                    <span>Standard tuning</span>
+                    <span>{result.tuning ? `${result.tuning.name} (${result.tuning.notes})` : 'Standard tuning'}</span>
+                    {result.tuning?.capo > 0 && <span className="text-zinc-300">Capo {result.tuning.capo}</span>}
                     <span>{result.note_count} notes</span>
                     <span>Source: {result.stem}</span>
                 </div>
@@ -120,7 +125,7 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek }) => {
                     {result.note_count > 0 && lines.map((line, lineIdx) => (
                         <div key={lineIdx} className="flex mb-6 whitespace-pre text-zinc-300">
                             <div className="text-zinc-500">
-                                {STRING_NAMES.map((n) => <div key={n}>{n.padStart(2)}|</div>)}
+                                {labels.map((n, i) => <div key={i}>{n.padStart(labelWidth)}|</div>)}
                             </div>
                             {line.map((m) => {
                                 const active = m.index === activeIndex;
