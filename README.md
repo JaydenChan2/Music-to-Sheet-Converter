@@ -101,7 +101,51 @@ npm run dev
 | Tab playback | Karplus-Strong plucked-string synthesis in the browser (Web Audio API) |
 | Slide detection | basic-pitch pitch contour: a slide sweeps through the frets in between; a re-pick or hammer-on jumps |
 
-### Measuring accuracy
+---
+
+## 📊 Evaluation
+
+The pipeline is evaluated on [GuitarSet](https://guitarset.weebly.com/) (Xi et al., ISMIR 2018), a dataset of 360 solo acoustic guitar recordings. Its note annotations were recorded with a hexaphonic pickup and corrected by hand, so every note has a pitch, onset, offset **and string**.
+
+**Setup**
+- **Audio:** the mono microphone recordings (not the hexaphonic pickup), GuitarSet 1.1.0 from [Zenodo](https://zenodo.org/records/3371780).
+- **Split:** random with a fixed seed (0): 20 validation clips (3,400 notes) and 60 test clips (11,280 notes). The test clips are half accompaniment, half solo, and cover all 6 players.
+- **Pipeline:** the app's real pipeline, `transcribe(separate=False)`: basic-pitch, then beat grid / 16th-note quantisation, then Viterbi fingering. Demucs is off.
+- **Tuning:** the only tuned setting is basic-pitch's onset threshold. It was picked on the validation clips (0.6), then the test set was scored once with it.
+- **Metrics:** [`mir_eval.transcription`](https://craffel.github.io/mir_eval/) at standard tolerances: pitch within 50 cents, onset within 50 ms, offset within max(50 ms, 20% of the note's length). Fingering is scored on notes whose pitch and onset match: is the note on the annotated string and fret?
+
+**Results: test set, 60 clips, 11,280 reference notes**
+
+| Metric | Score |
+|---|---|
+| Note onset F1 (mean per clip) | **71.3%** (precision 73.6%, recall 71.1%) |
+| Note onset F1 (pooled over all notes) | 66.8% |
+| Note onset + offset F1 (mean per clip) | 39.5% |
+| Exact string & fret, of the 6,906 correctly detected notes | **55.2%** |
+| Right pitch but a different string, of the same notes | 44.8% |
+
+For reference, basic-pitch's raw notes before they are snapped to the 16th-note grid score 79.2% onset F1. Quantising to a readable tab costs about 8 points.
+
+**Limitations**
+- **basic-pitch was probably trained on GuitarSet**, so some of these recordings may have been in its training data, which would inflate the note F1. The fingering score comes from this project's own Viterbi step and is not affected. A cleaner test would use only basic-pitch's GuitarSet test split, or a dataset it never saw (e.g. IDMT-SMT-Guitar).
+- **Solo, clean studio audio, with Demucs off.** Real songs with a band behind the guitar will likely score lower, and this benchmark doesn't measure that.
+- **Fingering is graded against one player's choice.** A "different string" is often still playable, so 55.2% understates how usable the tabs are.
+- **Offsets are coarse by design.** The app gives every note in a chord the same grid-snapped length, so treat onset + offset F1 as a rough floor.
+- **The split is random, not by player.** Validation and test share players and chord progressions. Only one setting was tuned, so the effect should be small.
+- **Only 60 of the 340 non-validation clips are scored.** Pass `--n-test 340` for a tighter estimate.
+
+**Reproduce**
+
+```bash
+cd backend
+mkdir -p .benchmark_cache/guitarset && cd .benchmark_cache/guitarset
+curl -L -o annotation.zip     https://zenodo.org/api/records/3371780/files/annotation.zip/content
+curl -L -o audio_mono-mic.zip https://zenodo.org/api/records/3371780/files/audio_mono-mic.zip/content
+unzip -q annotation.zip -d annotation && unzip -q audio_mono-mic.zip -d audio_mono-mic
+cd ../.. && .venv/bin/python benchmark_guitarset.py     # ~5 min; outputs are cached
+```
+
+`benchmark.py` is a small smoke test (one real scale recording plus synthetic clips, including slide detection), useful for quick checks while developing:
 
 ```bash
 cd backend && .venv/bin/python benchmark.py          # add --sweep to compare onset thresholds
