@@ -24,6 +24,14 @@ const ROWS = [
     visual: <Stems seed={4} />,
   },
   {
+    id: 'tutorial',
+    kicker: 'Tutorial mode',
+    title: <>Listens to<br />the teacher</>,
+    text: "Pick Tutorial for lesson videos. It reads the video's captions — or recognises the speech on your own computer — and picks up the capo, tuning and chords the teacher mentions, so the tab starts from the right setup. Notes heard in the teacher's voice are left out.",
+    visual: <Waveform seed={23} split={0.35} animate />,
+    chips: ['Capo', 'Tuning', 'Chords', 'Transcript'],
+  },
+  {
     id: 'slides',
     kicker: 'Technique',
     title: <>Slides,<br />marked</>,

@@ -3,6 +3,7 @@ import UploadSection from '../components/UploadSection';
 import TabViewer from '../components/TabViewer';
 import PlaybackControls from '../components/PlaybackControls';
 import SynthPanel from '../components/SynthPanel';
+import LessonPanel from '../components/LessonPanel';
 import { STAGES, useStudio } from '../studio/studio';
 
 function Status() {
@@ -17,7 +18,7 @@ function Status() {
 
 function Processing() {
   const { job, title } = useStudio();
-  const stages = STAGES.filter((s) => s.id !== 'queued');
+  const stages = STAGES.filter((s) => s.id !== 'queued' && (!s.tutorialOnly || job.video_type === 'tutorial') && (s.id !== 'downloading' || job.from_link));
   const nowIdx = stages.findIndex((s) => s.id === job.stage);
   const now = STAGES.find((s) => s.id === job.stage);
   return (
@@ -51,6 +52,8 @@ function Results() {
         </div>
         <button className="btn btn--ghost btn--sm" onClick={s.reset}>New song</button>
       </div>
+
+      <LessonPanel lesson={s.result.lesson} onSeek={(t) => s.seekTo(t)} />
 
       <TabViewer
         result={s.result}
@@ -113,6 +116,7 @@ export default function Studio() {
               tunings={s.tunings}
               maxCapo={s.maxCapo}
               separationAvailable={s.separationAvailable}
+              speechAvailable={s.speechAvailable}
               error={s.error}
             />
           )}

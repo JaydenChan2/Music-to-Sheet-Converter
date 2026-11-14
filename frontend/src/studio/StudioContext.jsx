@@ -6,7 +6,7 @@ import { TabSynth } from '../synth';
 import { createJobFromFile, createJobFromUrl, getHealth, waitForJob } from '../api';
 
 
-const DEFAULT_OPTIONS = { separate: true, tuning: 'standard', capo: 0, customTuning: '' };
+const DEFAULT_OPTIONS = { videoType: 'song', separate: true, tuning: 'standard', capo: 0, customTuning: '' };
 const OPTIONS_KEY = 'guitar-options';
 const DEFAULT_PLAYBACK = { mode: 'original', tone: 'acoustic', speed: 1, metronome: false, volume: 0.8 };
 const PLAYBACK_KEY = 'playback-settings';
@@ -36,6 +36,7 @@ export function StudioProvider({ children }) {
   const [tunings, setTunings] = useState([{ id: 'standard', name: 'Standard', notes: 'E A D G B E' }]);
   const [maxCapo, setMaxCapo] = useState(12);
   const [separationAvailable, setSeparationAvailable] = useState(false);
+  const [speechAvailable, setSpeechAvailable] = useState(false);
   const [backendUp, setBackendUp] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -55,6 +56,7 @@ export function StudioProvider({ children }) {
       .then((h) => {
         setBackendUp(true);
         setSeparationAvailable(h.separation_available);
+        setSpeechAvailable(!!h.speech_available);
         if (h.tunings) setTunings(h.tunings);
         if (h.max_capo) setMaxCapo(h.max_capo);
       })
@@ -122,16 +124,16 @@ export function StudioProvider({ children }) {
     setLoopBar(null);
   };
 
-  const startJob = async (label, create) => {
+  const startJob = async (label, create, fromLink) => {
     resetPlayback();
     setTitle(label);
     setResult(null);
     setError(null);
-    setJob({ status: 'running', stage: 'queued', progress: 0 });
+    setJob({ status: 'running', stage: 'queued', progress: 0, video_type: options.videoType, from_link: fromLink });
     try {
       const created = await create();
       const finished = await waitForJob(created.id, (j) => {
-        setJob(j);
+        setJob({ ...j, from_link: fromLink });
         if (j.title) setTitle(j.title);
       });
       synth.load(finished.result);
@@ -153,8 +155,8 @@ export function StudioProvider({ children }) {
     }
   };
 
-  const transcribeFile = (file) => startJob(file.name, () => createJobFromFile(file, options));
-  const transcribeUrl = (url) => startJob(url, () => createJobFromUrl(url, options));
+  const transcribeFile = (file) => startJob(file.name, () => createJobFromFile(file, options), false);
+  const transcribeUrl = (url) => startJob(url, () => createJobFromUrl(url, options), true);
 
   const startPlaying = (mode = playback.mode) => {
     if (mode === 'synth') {
@@ -225,7 +227,7 @@ export function StudioProvider({ children }) {
     // job
     title, job, result, error, setError, isProcessing, transcribeFile, transcribeUrl, reset,
     // setup
-    options, setOption, tunings, maxCapo, separationAvailable, backendUp,
+    options, setOption, tunings, maxCapo, separationAvailable, speechAvailable, backendUp,
     // playback
     playback, setPlaybackOption, isPlaying, currentTime, duration, loopBar, currentBar,
     togglePlay: () => (isPlaying ? stopPlaying() : startPlaying()),

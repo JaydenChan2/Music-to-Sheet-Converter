@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 
 from audio_processor import MAX_CAPO, ProcessingError, resolve_tuning, separation_available, transcribe, tuning_presets
 from sources import download_audio, validate_url
+from tutorial import fetch_captions, speech_available
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 log = logging.getLogger('app')
@@ -22,6 +23,8 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'}
 SERVED_FILES = {'original.mp3', 'transcription.mid', 'tab.txt'}
+# 'tab' (reading tabs shown in the video) is planned but not built yet.
+VIDEO_TYPES = {'song', 'tutorial'}
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
@@ -53,10 +56,16 @@ def run_job(job_id):
             source, title = download_audio(job['_url'], job_dir)
             update_job(job_id, title=title)
 
+        captions = None
+        if job['video_type'] == 'tutorial' and job['_url']:
+            update_job(job_id, stage='listening', progress=0.04)
+            captions = fetch_captions(job['_url'], job_dir)
+
         def progress(stage, frac):
             update_job(job_id, stage=stage, progress=frac)
 
-        result = transcribe(source, job_dir, separate=job['separate'], tuning=job['_tuning'], progress=progress)
+        result = transcribe(source, job_dir, separate=job['separate'], tuning=job['_tuning'], progress=progress,
+                            video_type=job['video_type'], captions=captions)
         base = f"/api/jobs/{job_id}/files"
         result['files'] = {
             'original': f"{base}/original.mp3",
@@ -82,6 +91,8 @@ def health():
     return jsonify({
         'ok': True,
         'separation_available': separation_available(),
+        'speech_available': speech_available(),
+        'video_types': sorted(VIDEO_TYPES),
         'tunings': tuning_presets(),
         'max_capo': MAX_CAPO,
     })
@@ -99,6 +110,9 @@ def create_job():
         tuning = resolve_tuning(options.get('tuning', 'standard'), options.get('capo', 0), options.get('custom_tuning'))
     except ProcessingError as e:
         return jsonify({'error': str(e)}), 400
+    video_type = options.get('video_type', 'song') or 'song'
+    if video_type not in VIDEO_TYPES:
+        return jsonify({'error': f"Unknown video type '{video_type}'."}), 400
 
     if 'file' in request.files:
         file = request.files['file']
@@ -124,7 +138,7 @@ def create_job():
         jobs[job_id] = {
             'id': job_id, 'status': 'running', 'stage': 'queued', 'progress': 0.0,
             'title': title, 'separate': separate and separation_available(), 'error': None, 'result': None,
-            'tuning': tuning['name'], 'capo': tuning['capo'],
+            'tuning': tuning['name'], 'capo': tuning['capo'], 'video_type': video_type,
             '_dir': job_dir, '_source': source, '_url': url, '_tuning': tuning,
         }
     executor.submit(run_job, job_id)

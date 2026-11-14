@@ -18,9 +18,9 @@ export async function getHealth() {
   return parse(await fetch(`${API}/health`));
 }
 
-// options: { separate, tuning, capo, customTuning }
-function jobOptions({ separate, tuning, capo, customTuning }) {
-  return { separate, tuning, capo, custom_tuning: tuning === 'custom' ? customTuning : '' };
+// options: { videoType, separate, tuning, capo, customTuning }
+function jobOptions({ videoType, separate, tuning, capo, customTuning }) {
+  return { video_type: videoType || 'song', separate, tuning, capo, custom_tuning: tuning === 'custom' ? customTuning : '' };
 }
 
 export async function createJobFromFile(file, options) {

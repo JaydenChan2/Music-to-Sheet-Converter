@@ -19,6 +19,8 @@ import librosa
 import numpy as np
 import soundfile as sf
 
+import tutorial
+
 log = logging.getLogger(__name__)
 
 SR = 22050  # basic-pitch's native sample rate
@@ -133,13 +135,17 @@ def resolve_tuning(tuning='standard', capo=0, custom=None):
         name, strings = TUNINGS[tuning]
     else:
         raise ProcessingError(f"Unknown tuning '{tuning}'.")
+    return build_tuning(tuning, name, strings, capo)
 
+
+def build_tuning(tuning_id, name, strings, capo):
+    """Tuning dict used by the pipeline, for open strings (low -> high) and a capo fret."""
     # With a capo, frets are written relative to the capo (0 = capo'd string).
     sounding = [m + capo for m in strings]
     names = _string_names(strings)
     labels = names[:-1] + [names[-1].lower()]  # lowercase high string, like the classic "e"
     return {
-        'id': tuning,
+        'id': tuning_id,
         'name': name,
         'capo': capo,
         'strings': list(strings),  # open strings without capo, low -> high
@@ -193,8 +199,13 @@ def _get_demucs():
 # Pipeline
 # ---------------------------------------------------------------------------
 
-def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda stage, frac: None):
-    """Run the full pipeline. Writes artifacts into job_dir and returns the result dict."""
+def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda stage, frac: None,
+               video_type='song', captions=None):
+    """Run the full pipeline. Writes artifacts into job_dir and returns the result dict.
+
+    video_type='tutorial' also listens to the teacher (captions or local speech
+    recognition) to pick up the capo, tuning and chords they mention.
+    """
     tuning = tuning or resolve_tuning()
     progress('decoding', 0.05)
     mix_path = decode_audio(source_path, job_dir)
@@ -202,6 +213,10 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     duration = len(mix) / SR
     if duration < 0.5 or np.max(np.abs(mix)) < 1e-4:
         raise ProcessingError("The audio is empty or silent.")
+
+    lesson = None
+    if video_type == 'tutorial':
+        lesson, tuning = listen_to_teacher(mix_path, tuning, captions, progress)
 
     stem_used = 'full mix'
     if separate and separation_available():
@@ -214,6 +229,12 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     stem_path = os.path.join(job_dir, 'stem.wav')
     sf.write(stem_path, target, SR)
     notes = detect_notes(stem_path, tuning=tuning)
+    if lesson is not None:
+        # Demucs already removes the voice; without it, notes "heard" in the
+        # teacher's speech are dropped. Captions are too coarsely timed for this.
+        if stem_used == 'full mix' and lesson['source'] == 'speech recognition':
+            notes, lesson['dropped_notes'] = tutorial.drop_notes_during_speech(notes, lesson.pop('_segments'))
+        lesson.pop('_segments', None)
 
     progress('arranging', 0.85)
     tempo, grid = beat_grid(mix, duration, notes)
@@ -252,7 +273,60 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
         'slide_count': sum(len(t['slides']) for t in tabs),
         'stem': stem_used,
         'tuning': {k: tuning[k] for k in ('id', 'name', 'capo', 'labels', 'notes', 'open_strings')},
+        'video_type': video_type,
+        'lesson': lesson,
     }
+
+
+def listen_to_teacher(mix_path, tuning, captions, progress):
+    """Tutorial mode: read the capo/tuning/chords the teacher mentions.
+
+    Spoken settings only fill in what the user left at the defaults (standard
+    tuning, no capo); an explicit choice wins and the disagreement is reported.
+    Returns (lesson info, possibly updated tuning).
+    """
+    progress('listening', 0.08)
+    language = None
+    if captions:
+        segments, source = captions, 'captions'
+    elif tutorial.speech_available():
+        segments, language = tutorial.transcribe_speech(mix_path, lambda f: progress('listening', 0.08 + 0.06 * f))
+        source = 'speech recognition'
+    else:
+        segments, source = [], None
+
+    hints = tutorial.extract_hints(segments, MAX_CAPO, set(TUNINGS))
+    applied, ignored = {}, {}
+
+    heard = hints['tuning']
+    if heard and heard['value'] != tuning['id']:
+        name, strings = TUNINGS[heard['value']]
+        entry = {**heard, 'name': name}
+        if tuning['id'] == 'standard':
+            tuning = build_tuning(heard['value'], name, strings, tuning['capo'])
+            applied['tuning'] = entry
+        else:
+            ignored['tuning'] = entry
+
+    heard = hints['capo']
+    if heard and heard['value'] != tuning['capo']:
+        if tuning['capo'] == 0:
+            tuning = build_tuning(tuning['id'], tuning['name'], tuning['strings'], heard['value'])
+            applied['capo'] = heard
+        else:
+            ignored['capo'] = heard
+
+    log.info("Tutorial: %s, %d segments, applied=%s ignored=%s", source, len(segments), applied, ignored)
+    return {
+        'source': source,
+        'language': language,
+        'applied': applied,
+        'ignored': ignored,
+        'chords': hints['chords'],
+        'transcript': tutorial.trim_transcript(segments),
+        'dropped_notes': 0,
+        '_segments': segments,
+    }, tuning
 
 
 def decode_audio(source_path, job_dir):

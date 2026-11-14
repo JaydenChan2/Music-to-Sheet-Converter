@@ -11,9 +11,44 @@ const Tick = () => (
     </svg>
 );
 
+const VIDEO_TYPES = [
+    { id: 'song', title: 'Song', text: 'A recording or performance. Transcribes what it hears.' },
+    { id: 'tutorial', title: 'Tutorial', text: 'A lesson with talking. Uses the capo, tuning and chords the teacher mentions.' },
+    { id: 'tab', title: 'Tabs on screen', text: 'Reads the tab shown in the video.', soon: true },
+];
+
+const VideoTypePicker = ({ value, onChange, speechAvailable }) => (
+    <div className="vtype">
+        <p className="setup__label"><b>01</b> What kind of video?</p>
+        <div className="vtype__grid" role="radiogroup" aria-label="Video type">
+            {VIDEO_TYPES.map((t) => (
+                <button
+                    key={t.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={value === t.id}
+                    disabled={t.soon}
+                    className={`vtype__card${value === t.id ? ' is-on' : ''}`}
+                    onClick={() => onChange(t.id)}
+                >
+                    <span className="vtype__title">{t.title}{t.soon && <em>Soon</em>}</span>
+                    <span className="vtype__text">{t.text}</span>
+                </button>
+            ))}
+        </div>
+        {value === 'tutorial' && (
+            <p className="setup__hint">
+                {speechAvailable
+                    ? "YouTube captions are used when the video has them; otherwise speech is recognised on this computer. What the teacher says fills in Tuning and Capo if you leave them at Standard / No capo."
+                    : 'Speech recognition isn\'t installed on the backend (pip install faster-whisper), so only links that have captions can be listened to.'}
+            </p>
+        )}
+    </div>
+);
+
 const GuitarSettings = ({ options, onOptionChange, tunings, maxCapo, separationAvailable }) => (
     <div className="setup__col">
-        <p className="setup__label"><b>01</b> Your guitar</p>
+        <p className="setup__label"><b>02</b> Your guitar</p>
         <p className="setup__hint">How is the guitar in the recording set up?</p>
         <div className="fields fields--2">
             <label className="field">
@@ -70,7 +105,7 @@ const GuitarSettings = ({ options, onOptionChange, tunings, maxCapo, separationA
     </div>
 );
 
-const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange, tunings, maxCapo, separationAvailable, error }) => {
+const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange, tunings, maxCapo, separationAvailable, speechAvailable, error }) => {
     const [isDragging, setIsDragging] = useState(false);
     const [localError, setLocalError] = useState(null);
     const [url, setUrl] = useState('');
@@ -130,6 +165,8 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
     };
 
     return (
+        <div>
+            <VideoTypePicker value={options.videoType} onChange={(v) => onOptionChange('videoType', v)} speechAvailable={speechAvailable} />
         <div className="setup">
             <GuitarSettings
                 options={options}
@@ -140,7 +177,7 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
             />
 
             <div className="setup__col">
-                <p className="setup__label"><b>02</b> Add a song</p>
+                <p className="setup__label"><b>03</b> Add a song</p>
                 <div
                     className={`drop${isDragging ? ' is-over' : ''}`}
                     role="button"
@@ -192,6 +229,7 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
                     </div>
                 )}
             </div>
+        </div>
         </div>
     );
 };
