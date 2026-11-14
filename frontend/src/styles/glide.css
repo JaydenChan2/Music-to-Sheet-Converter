@@ -427,6 +427,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .dtable th { text-align: left; font-size: .68rem; letter-spacing: .24em; text-transform: uppercase; font-weight: 500; padding: 0 1rem 1rem 0; border-bottom: 2px solid var(--accent); }
 .dtable td { padding: 1.1rem 1rem 1.1rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 .dtable td:last-child, .dtable th:last-child { text-align: right; padding-right: 0; }
+.dtable--3 td:nth-child(2), .dtable--3 th:nth-child(2) { text-align: right; }
+.dtable td + td, .dtable th + th { text-align: right; }
 .dtable td strong { font-weight: 500; font-size: 1.15rem; letter-spacing: .02em; }
 .dtable td small { display: block; color: var(--ink-mute); font-size: .8rem; margin-top: .2rem; }
 

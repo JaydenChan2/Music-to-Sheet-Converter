@@ -66,8 +66,8 @@ export default function Home() {
           <h2 className="h2 mb-xl" data-reveal>Accuracy,<br />not adjectives</h2>
           <div className="stats stats--3">
             <Stat value="71.3" suffix="%" label="Note onset F1" />
-            <Stat value="55.2" suffix="%" label="Exact string & fret" delay="1" />
-            <Stat value="11280" suffix="notes" label="Scored on 60 test clips" delay="2" />
+            <Stat value="55.2" suffix="%" label="Exact string & fret, from audio" delay="1" />
+            <Stat value="94.5" suffix="%" label="String & fret with tabs on screen" note="On 12 tab videos with known answers, where audio alone scored 68.2%." delay="2" />
           </div>
           <div className="mt-lg" data-reveal><LinkArrow to="/accuracy">Read the evaluation</LinkArrow></div>
         </div>

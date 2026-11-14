@@ -12,6 +12,19 @@ const RESULTS = [
   { metric: 'basic-pitch raw notes, before the grid', sub: 'Onset F1 for reference', score: '79.2%' },
 ];
 
+const CALIBRATION = [
+  { shown: '~44%', notes: '590', right: '52.5%' },
+  { shown: '~61%', notes: '1,413', right: '64.5%' },
+  { shown: '~78%', notes: '2,012', right: '80.5%' },
+  { shown: '~93%', notes: '3,921', right: '93.3%' },
+];
+
+const TAB_VIDEO = [
+  { metric: 'Exact string & fret', sub: 'Of notes matched to the answers', audio: '68.2%', video: '94.5%', strong: true },
+  { metric: 'Note onset F1', sub: 'Were the right notes found, at the right time?', audio: '66.4%', video: '66.5%' },
+  { metric: 'Drawn notes read back correctly', sub: 'Frame reader alone · 10 of 12 clips between 77% and 100%', audio: '–', video: '86.3%' },
+];
+
 const SETUP = [
   { k: 'Audio', v: 'The mono microphone recordings (not the hexaphonic pickup), GuitarSet 1.1.0 from Zenodo.' },
   { k: 'Split', v: 'Random with a fixed seed: 20 validation clips (3,400 notes) and 60 test clips (11,280 notes), half accompaniment and half solo, covering all 6 players.' },
@@ -27,6 +40,8 @@ const LIMITS = [
   { k: 'Coarse offsets', v: 'Every note in a chord gets the same grid-snapped length, so treat onset + offset F1 as a rough floor.' },
   { k: 'Random split', v: 'Validation and test share players and progressions. Only one setting was tuned, so the effect should be small.' },
   { k: 'Sample size', v: 'Only 60 of the 340 non-validation clips are scored. Pass --n-test 340 for a tighter estimate.' },
+  { k: 'The tab check knows clean guitar', v: 'Its confidence model was fitted on GuitarSet. On lo-fi or dense mixes it is less sure of itself and hides more notes, which is why hidden notes can be shown again in the studio.' },
+  { k: 'Drawn tab videos, not real ones', v: 'The tabs-on-screen numbers come from tab videos drawn from the annotations, so the answers are known. Real videos vary more in style; very dense, fast strumming is the reader’s weak spot (two rock clips read at 25% and 56%).' },
 ];
 
 export default function Accuracy() {
@@ -82,6 +97,78 @@ export default function Accuracy() {
         </div>
       </section>
 
+      <section className="section" id="tab-check" style={{ scrollMarginTop: 'var(--h-nav)' }}>
+        <div className="wrap">
+          <div className="statement mb-xl">
+            <div>
+              <p className="eyebrow" data-reveal>Tab check</p>
+              <h2 className="h2" data-reveal>Checked against<br />the recording</h2>
+            </div>
+            <p className="lede" data-reveal data-reveal-delay="1">
+              After the tab is built, every note is checked against the audio and given a confidence. Notes the
+              recording barely supports are hidden, and the score is honest: notes shown as 80% sure are right
+              about 80% of the time.
+            </p>
+          </div>
+          <div className="stats stats--3">
+            <Stat value="72.9" suffix="%" label="Note onset F1 with the check" note="Up from 71.3% without it, on the same 60 test clips." />
+            <Stat value="0.84" label="Right-vs-wrong separation" note="Cross-validated AUC of the confidence model on 3,009 validation notes." delay="1" />
+            <Stat value="5.4" suffix="pts" label="Overall score error" note="Average gap between the tab’s score and its real share of right notes." delay="2" />
+          </div>
+          <div className="wrap--narrow" style={{ marginTop: 'clamp(64px, 11vh, 120px)' }}>
+            <table className="dtable" data-reveal>
+              <thead><tr><th>Confidence shown</th><th>Notes</th><th>Actually right</th></tr></thead>
+              <tbody>
+                {CALIBRATION.map((c) => (
+                  <tr key={c.shown}><td>{c.shown}</td><td>{c.notes}</td><td><strong>{c.right}</strong></td></tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="body" style={{ marginTop: '1.4rem', color: 'var(--ink-mute)' }}>
+              Bars flagged “double-check” have about 75% of notes right, against 83% for the rest. Test set, scored once.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="section section--alt" id="tabs-on-screen" style={{ scrollMarginTop: 'var(--h-nav)' }}>
+        <div className="wrap">
+          <div className="statement mb-xl">
+            <div>
+              <p className="eyebrow" data-reveal>Tabs on screen</p>
+              <h2 className="h2" data-reveal>When the video<br />shows the tab</h2>
+            </div>
+            <p className="lede" data-reveal data-reveal-delay="1">
+              GuitarSet’s annotations were drawn as a play-along tab video — bar numbers, page flips, video
+              compression — and played over the real recordings, so every right answer is known. 12 test clips.
+            </p>
+          </div>
+          <div className="stats stats--3">
+            <Stat value="94.5" suffix="%" label="Exact string & fret" note="With the tab on screen, against 68.2% from the audio alone." />
+            <Stat value="86.3" suffix="%" label="Drawn notes read correctly" note="By the frame reader, before matching to the audio." delay="1" />
+            <Stat value="76" suffix="%" label="Hardest clip, fixed" note="A jazz clip where audio alone put 0% of notes on the right string." delay="2" />
+          </div>
+          <div className="wrap--narrow" style={{ marginTop: 'clamp(64px, 11vh, 120px)' }}>
+            <table className="dtable dtable--3" data-reveal>
+              <thead><tr><th>Metric</th><th>Audio only</th><th>Tabs on screen</th></tr></thead>
+              <tbody>
+                {TAB_VIDEO.map((r) => (
+                  <tr key={r.metric}>
+                    <td>{r.metric}<small>{r.sub}</small></td>
+                    <td><strong>{r.audio}</strong></td>
+                    <td>{r.strong ? <strong className="hl">{r.video}</strong> : <strong>{r.video}</strong>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="body" style={{ marginTop: '1.4rem', color: 'var(--ink-mute)' }}>
+              The video fixes <em>where</em> notes are played, not <em>which</em> notes are found — so note F1 stays put
+              while string and fret accuracy jumps.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section className="section">
         <div className="wrap detail">
           <div>
@@ -119,14 +206,16 @@ export default function Accuracy() {
       <section className="section">
         <div className="wrap--narrow">
           <p className="eyebrow" data-reveal>Reproduce</p>
-          <h2 className="h2 mb-xl" data-reveal>About five minutes</h2>
+          <h2 className="h2 mb-xl" data-reveal>Run it yourself</h2>
           <pre className="code" data-reveal>
             <span className="p">$ </span>cd backend{'\n'}
             <span className="p">$ </span>mkdir -p .benchmark_cache/guitarset && cd .benchmark_cache/guitarset{'\n'}
             <span className="p">$ </span>curl -L -o annotation.zip     https://zenodo.org/api/records/3371780/files/annotation.zip/content{'\n'}
             <span className="p">$ </span>curl -L -o audio_mono-mic.zip https://zenodo.org/api/records/3371780/files/audio_mono-mic.zip/content{'\n'}
             <span className="p">$ </span>unzip -q annotation.zip -d annotation && unzip -q audio_mono-mic.zip -d audio_mono-mic{'\n'}
-            <span className="p">$ </span>cd ../.. && .venv/bin/python benchmark_guitarset.py   <span className="c"># outputs are cached</span>
+            <span className="p">$ </span>cd ../.. && .venv/bin/python benchmark_guitarset.py   <span className="c"># outputs are cached</span>{'\n'}
+            <span className="p">$ </span>.venv/bin/python benchmark_verify.py test           <span className="c"># tab check</span>{'\n'}
+            <span className="p">$ </span>.venv/bin/python benchmark_tabvideo.py --clips 12   <span className="c"># tabs on screen</span>
           </pre>
           <div className="mt-lg" data-reveal>
             <LinkArrow href="https://guitarset.weebly.com/">About GuitarSet</LinkArrow>
