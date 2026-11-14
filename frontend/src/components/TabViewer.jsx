@@ -4,7 +4,6 @@ import { Download } from 'lucide-react';
 // Fallback string names (high to low, top to bottom as displayed)
 const STANDARD_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
 const SLIDE_MARKS = { up: '/', down: '\\' };
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace";
 
 // Lay out one measure as 16th-note slot columns. Each slot is as wide as its
 // widest fret number plus one dash, so rhythm stays readable.
@@ -16,7 +15,7 @@ function layoutMeasure(cells) {
     return { slots, width: slots.reduce((w, s) => w + s.width, 0) + 1 };
 }
 
-const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick }) => {
+const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, children }) => {
     const containerRef = useRef(null);
     const charRef = useRef(null);
     const activeRef = useRef(null);
@@ -87,52 +86,39 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick }) => {
     const labels = result?.tuning?.labels || STANDARD_LABELS;
     const labelWidth = Math.max(...labels.map((l) => l.length));
 
-    if (!result) {
-        return (
-            <div className="text-center py-20 border border-dashed border-zinc-800 rounded-xl">
-                <p className="text-zinc-600 text-sm">Waiting for audio data...</p>
-            </div>
-        );
-    }
+    if (!result) return null;
 
     return (
-        <div className="w-full mt-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
-                <div className="flex flex-wrap gap-x-5 gap-y-1">
-                    <span>~{Math.round(result.tempo)} BPM</span>
-                    <span>{result.time_signature.join('/')}</span>
-                    <span>{result.tuning ? `${result.tuning.name} (${result.tuning.notes})` : 'Standard tuning'}</span>
-                    {result.tuning?.capo > 0 && <span className="text-zinc-300">Capo {result.tuning.capo}</span>}
-                    <span>{result.note_count} notes</span>
-                    {result.slide_count > 0 && (
-                        <span title="/ = slide up, \ = slide down">
-                            {result.slide_count} slide{result.slide_count === 1 ? '' : 's'} (<span className="font-mono">/</span> up, <span className="font-mono">\</span> down)
-                        </span>
-                    )}
-                    <span>Source: {result.stem}</span>
-                </div>
-                <div className="flex gap-2">
-                    <a href={result.files.text} download className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-800 hover:border-zinc-600 hover:text-zinc-200 transition-colors">
-                        <Download size={12} /> TXT
-                    </a>
-                    <a href={result.files.midi} download className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-zinc-800 hover:border-zinc-600 hover:text-zinc-200 transition-colors">
-                        <Download size={12} /> MIDI
-                    </a>
+        <div>
+            <div className="res__meta">
+                <span className="chip">~{Math.round(result.tempo)} BPM</span>
+                <span className="chip">{result.time_signature.join('/')}</span>
+                <span className="chip">{result.tuning ? `${result.tuning.name} (${result.tuning.notes})` : 'Standard tuning'}</span>
+                {result.tuning?.capo > 0 && <span className="chip chip--on">Capo {result.tuning.capo}</span>}
+                <span className="chip">{result.note_count} notes</span>
+                {result.slide_count > 0 && (
+                    <span className="chip" title="/ = slide up, \ = slide down">
+                        {result.slide_count} slide{result.slide_count === 1 ? '' : 's'} (/ up, \ down)
+                    </span>
+                )}
+                <span className="chip">Source: {result.stem}</span>
+                <div className="res__dl">
+                    <a href={result.files.text} download className="tgl"><Download size={12} /> TXT</a>
+                    <a href={result.files.midi} download className="tgl"><Download size={12} /> MIDI</a>
                 </div>
             </div>
 
-            <div
-                className="select-text bg-zinc-900/30 rounded-xl p-6 border border-zinc-800/50"
-                style={{ fontFamily: FONT }}
-            >
-                <div ref={containerRef} className="relative w-full text-sm leading-6">
-                    <span ref={charRef} className="absolute invisible">0</span>
+            {children}
+
+            <div className="sheet select-text">
+                <div ref={containerRef} className="sheet__inner">
+                    <span ref={charRef} style={{ position: 'absolute', visibility: 'hidden' }}>0</span>
                     {result.note_count === 0 && (
-                        <p className="text-zinc-500 text-sm">No guitar notes were detected in this audio.</p>
+                        <p className="sheet__empty">No guitar notes were detected in this audio.</p>
                     )}
                     {result.note_count > 0 && lines.map((line, lineIdx) => (
-                        <div key={lineIdx} className="flex mb-6 whitespace-pre text-zinc-300">
-                            <div className="text-zinc-500">
+                        <div key={lineIdx} className="sheet__line">
+                            <div className="sheet__labels">
                                 {labels.map((n, i) => <div key={i}>{n.padStart(labelWidth)}|</div>)}
                             </div>
                             {line.map((m) => {
@@ -143,10 +129,10 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick }) => {
                                         ref={isActive ? activeRef : null}
                                         onClick={() => onSeek?.(Math.max(0, m.start))}
                                         title={`Bar ${m.index + 1}`}
-                                        className={`flex cursor-pointer rounded-sm transition-colors ${isActive ? 'bg-white/10 text-white' : 'hover:bg-white/5'}`}
+                                        className={`sheet__bar${isActive ? ' is-on' : ''}`}
                                     >
                                         {m.slots.map((slot, si) => (
-                                            <div key={si} className={isActive && si === activeSlot && isPlaying ? 'bg-white/20 rounded-sm' : ''}>
+                                            <div key={si} className={isActive && si === activeSlot && isPlaying ? 'sheet__slot is-on' : 'sheet__slot'}>
                                                 {slot.cells.map((cell, r) => (
                                                     <div key={r}>
                                                         {cell && cell.text ? (
@@ -156,7 +142,7 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick }) => {
                                                                     onNoteClick?.(cell.string, cell.fret);
                                                                 }}
                                                                 title="Play this note"
-                                                                className="hover:text-emerald-300 hover:bg-emerald-400/10 rounded-sm"
+                                                                className="sheet__note"
                                                             >
                                                                 {cell.text}
                                                             </span>
