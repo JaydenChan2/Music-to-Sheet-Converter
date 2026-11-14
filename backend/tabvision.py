@@ -267,7 +267,7 @@ def find_glyphs(staff, fg, line_mask):
     # join neighbouring digits on the same string ("1" + "2" -> "12")
     merged = []
     for g in glyphs:
-        if merged and merged[-1].string == g.string and g.x0 - merged[-1].x1 <= 0.3 * s:
+        if merged and merged[-1].string == g.string and g.x0 - merged[-1].x1 <= 0.22 * s:
             m = merged[-1]
             merged[-1] = Glyph(m.string, m.x0, max(m.x1, g.x1), min(m.y0, g.y0), max(m.y1, g.y1), m.parts + g.parts)
         else:
@@ -276,7 +276,11 @@ def find_glyphs(staff, fg, line_mask):
 
 
 def read_glyphs(glyphs, ink):
-    """Classify each glyph's digits; keeps only glyphs that read as a fret number (or x)."""
+    """Classify each glyph's digits; keeps only glyphs that read as a fret number (or x).
+
+    Neighbouring digits were joined into one number when close together. If the
+    joined reading can't be a fret (over 24, or a first digit other than 1/2 -
+    e.g. a dense "1-4-4-4" run), it is split back into separate notes."""
     from digit_model import classify
     crops = [ink[y0:y1, x0:x1] for g in glyphs for x0, x1, y0, y1 in g.parts]
     labels = iter(classify(crops))
@@ -284,13 +288,20 @@ def read_glyphs(glyphs, ink):
     for g in glyphs:
         read = [next(labels) for _ in g.parts]
         chars = [c for c, _ in read]
-        if 'other' in chars or ('x' in chars and len(chars) > 1):
-            continue
-        text = ''.join(chars)
-        if text != 'x' and int(text) > 24:
-            continue  # no guitar has that fret: a misread or not a fret number
-        g.text, g.score = text, float(min(p for _, p in read))
-        out.append(g)
+        if len(chars) > 1 and ('other' in chars or chars[0] not in '12' or 'x' in chars
+                               or not ''.join(chars).isdigit() or int(''.join(chars)) > 24):
+            pieces = [(Glyph(g.string, *part, parts=[part]), [r]) for part, r in zip(g.parts, read)]
+        else:
+            pieces = [(g, read)]
+        for piece, r in pieces:
+            cs = [c for c, _ in r]
+            if 'other' in cs:
+                continue
+            text = ''.join(cs)
+            if text != 'x' and (not text.isdigit() or int(text) > 24):
+                continue  # no guitar has that fret: a misread or not a fret number
+            piece.text, piece.score = text, float(min(p for _, p in r))
+            out.append(piece)
     return out
 
 

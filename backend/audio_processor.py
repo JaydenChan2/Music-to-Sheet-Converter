@@ -330,6 +330,8 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     changes, removed = verify.refine(events, evidence, stretch, tuning)
     if changes['repitched'] or changes['removed']:
         assign_fingerings(events, tuning)
+        if on_screen:
+            apply_video_fingerings(events, tuning)  # re-fingering must not undo what the video showed
     measures = build_measures(events, grid)
     report = verify.score(events, evidence, stretch, measures, tuning['open_strings'])
     report['changes'] = changes

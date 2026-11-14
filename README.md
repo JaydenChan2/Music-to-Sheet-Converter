@@ -141,6 +141,16 @@ For reference, basic-pitch's raw notes before they are snapped to the 16th-note 
 
 The model is fitted on clean solo guitar; on dense or lo-fi mixes it is less sure of itself and hides more notes, which is why hidden notes can be shown again in the Studio.
 
+**Tabs on screen** — `benchmark_tabvideo.py` draws the tab a play-along video would show from GuitarSet's string/fret annotations (page-flip, bar numbers, H.264-encoded) and plays it over the real recording, so the right answer is known. 12 test clips:
+
+| Metric | Audio only (song mode) | Tabs on screen |
+|---|---|---|
+| Exact string & fret, of matched notes | 68.2% | **94.5%** |
+| Note onset F1 | 66.4% | 66.5% |
+| Drawn notes the frame reader reads back correctly | – | 86.3% (10 of 12 clips 77–100%) |
+
+The video fixes *where* notes are played, not *which* notes are found. The reader struggles with very dense fast strumming (two rock clips at 25% and 56%).
+
 **Limitations**
 - **basic-pitch was probably trained on GuitarSet**, so some of these recordings may have been in its training data, which would inflate the note F1. The fingering score comes from this project's own Viterbi step and is not affected. A cleaner test would use only basic-pitch's GuitarSet test split, or a dataset it never saw (e.g. IDMT-SMT-Guitar).
 - **Solo, clean studio audio, with Demucs off.** Real songs with a band behind the guitar will likely score lower, and this benchmark doesn't measure that.
