@@ -84,7 +84,7 @@ npm run dev
 1.  **Start Services**: backend via `.venv/bin/python app.py`, frontend via `npm run dev`.
 2.  **Access App**: Open `http://localhost:5173` in your browser.
 3.  **Set up your guitar**: pick the tuning used in the recording (Standard, Drop D, half/whole step down, Drop C/C#, Open G/D/E, DADGAD, or a custom one like `D A D G B E`) and the capo fret, if any. With a capo, frets are written relative to the capo. Your choice is remembered.
-4.  **Add a song**: drop an audio file (MP3, WAV, M4A, FLAC, OGG, MP4...) or paste a link (YouTube, SoundCloud, Bandcamp, direct audio URL).
+4.  **Add a song**: drop an audio file (MP3, WAV, M4A, FLAC, OGG, MP4...) or paste a link (YouTube, SoundCloud, Bandcamp, direct audio URL). Up to 12 minutes are transcribed per job; for anything longer (e.g. a 30-minute lesson) set an optional **Start** / **End** time to pick the part you want. Links longer than 12 minutes need a range; long uploads without one are cut to the first 12 minutes, with a warning.
 5.  **Pick the video type**: *Song* for recordings and performances, *Tutorial* for lessons where someone talks you through it. Tutorial mode reads the video's captions (or runs local speech recognition with faster-whisper when there are none) and picks up the capo, tuning and chord names the teacher mentions. Spoken settings fill in Tuning/Capo only if you left them at Standard / No capo; your own choice always wins. *Tabs on screen* is planned.
 6.  **Isolate guitar** (on by default) separates the guitar from vocals, drums and bass first. Leave it on for full songs; turn it off for solo guitar recordings to save time.
 7.  **View Results**: the tab is laid out in 4/4 bars on a 16th-note grid; the current bar highlights during playback and clicking a bar jumps there. Slides are marked `/` (up) and `\` (down), e.g. `3/5`. Switch to **Synth** to hear the tab played by a built-in guitar synthesizer (acoustic, nylon, clean or overdriven electric), slow it down to 50-75%, loop a bar, turn on a metronome, or click any fret number to hear that note. Download it as **TXT** or **MIDI** (open the MIDI in MuseScore for standard notation).
@@ -96,6 +96,7 @@ npm run dev
 | Download links | yt-dlp |
 | Decode any format | ffmpeg |
 | Guitar isolation | Demucs `htdemucs_6s` |
+| Off-pitch recordings | Spectral-peak tuning estimate; recordings 20+ cents from A440 are resampled onto concert pitch before note detection |
 | Polyphonic note detection | Spotify basic-pitch |
 | Tempo / beat grid | librosa beat tracking |
 | String & fret choice | Viterbi search minimising hand movement and stretch |

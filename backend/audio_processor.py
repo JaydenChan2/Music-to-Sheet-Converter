@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 
 SR = 22050  # basic-pitch's native sample rate
 MIX_SR = 44100  # Demucs' native sample rate
-MAX_DURATION_S = 12 * 60
+MAX_DURATION_S = 12 * 60  # longest stretch transcribed in one job
+MAX_SOURCE_S = 3 * 60 * 60  # longest video/recording a range can be cut from
 
 # Standard tuning as MIDI note numbers, low E (index 0) -> high e (index 5)
 OPEN_STRINGS = [40, 45, 50, 55, 59, 64]
@@ -49,6 +50,11 @@ TUNINGS = {
 SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
 MIXED_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B']
+
+RETUNE_MIN_SEMITONES = 0.2  # retune recordings further than this from A440 before note detection...
+RETUNE_MIN_CONFIDENCE = 0.2  # ...when the spectral peaks agree on it (0 = scattered, 1 = all identical)
+TUNING_BINS_PER_SEMITONE = 10
+TUNING_MAX_SECONDS = 90  # analyse at most this much audio (spread over the recording)
 
 SLOTS_PER_BEAT = 4  # 16th-note grid
 BEATS_PER_MEASURE = 4
@@ -158,6 +164,41 @@ def build_tuning(tuning_id, name, strings, capo):
     }
 
 
+def parse_clock(value, field):
+    """'95', '1:35' or '0:01:35' -> seconds (float). Empty -> None."""
+    if value is None or str(value).strip() == '':
+        return None
+    text = str(value).strip()
+    try:
+        parts = [float(p) for p in text.split(':')]
+    except ValueError:
+        raise ProcessingError(f"{field} time '{text}' isn't a time. Use m:ss, like 4:10.")
+    if len(parts) > 3 or any(p < 0 for p in parts) or any(p >= 60 for p in parts[1:]):
+        raise ProcessingError(f"{field} time '{text}' isn't a time. Use m:ss, like 4:10.")
+    seconds = 0.0
+    for p in parts:
+        seconds = seconds * 60 + p
+    return seconds
+
+
+def clock(seconds):
+    seconds = int(round(seconds))
+    h, m, s = seconds // 3600, seconds % 3600 // 60, seconds % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def resolve_range(start=None, end=None):
+    """Validate an optional start/end selection. Returns (start, end) with end possibly None."""
+    start = parse_clock(start, 'Start') or 0.0
+    end = parse_clock(end, 'End')
+    if end is not None:
+        if end <= start:
+            raise ProcessingError("The end time has to be after the start time.")
+        if end - start > MAX_DURATION_S:
+            raise ProcessingError(f"The selected part is {clock(end - start)} long; pick at most {MAX_DURATION_S // 60} minutes.")
+    return start, end
+
+
 def tuning_presets():
     return [{'id': k, 'name': n, 'notes': ' '.join(_string_names(v))} for k, (n, v) in TUNINGS.items()]
 
@@ -200,7 +241,7 @@ def _get_demucs():
 # ---------------------------------------------------------------------------
 
 def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda stage, frac: None,
-               video_type='song', captions=None):
+               video_type='song', captions=None, start=0.0, end=None):
     """Run the full pipeline. Writes artifacts into job_dir and returns the result dict.
 
     video_type='tutorial' also listens to the teacher (captions or local speech
@@ -208,7 +249,17 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     """
     tuning = tuning or resolve_tuning()
     progress('decoding', 0.05)
-    mix_path = decode_audio(source_path, job_dir)
+    mix_path, clip = decode_audio(source_path, job_dir, start, end)
+    all_captions = None
+    if captions:
+        # Caption times are relative to the whole video; move them onto the clip.
+        # Capo/tuning hints may come from anywhere in the video (teachers say them
+        # in the intro); chords and the transcript stay within the selected part.
+        all_captions = [{**c, 'start': c['start'] - clip['start'], 'end': c['end'] - clip['start']} for c in captions]
+        captions = [
+            {**c, 'start': max(0.0, c['start'])}
+            for c in all_captions if c['end'] > 0 and c['start'] < clip['end'] - clip['start']
+        ]
     mix, _ = librosa.load(mix_path, sr=SR, mono=True)
     duration = len(mix) / SR
     if duration < 0.5 or np.max(np.abs(mix)) < 1e-4:
@@ -216,7 +267,7 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
 
     lesson = None
     if video_type == 'tutorial':
-        lesson, tuning = listen_to_teacher(mix_path, tuning, captions, progress)
+        lesson, tuning = listen_to_teacher(mix_path, tuning, captions, progress, all_captions)
 
     stem_used = 'full mix'
     if separate and separation_available():
@@ -226,9 +277,23 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
         target = mix
 
     progress('transcribing', 0.6)
+    # Recordings that aren't at A440 (tape, lo-fi, slowed re-uploads) put every
+    # note between two semitones, so the detector flips between neighbours.
+    # Shift the audio onto concert pitch first, then map note times back.
+    offset, confidence = estimate_pitch_offset(target)
+    stretch = 1.0
+    if abs(offset) >= RETUNE_MIN_SEMITONES and confidence >= RETUNE_MIN_CONFIDENCE:
+        stretch = 2 ** (-offset / 12)
+        target = librosa.resample(target, orig_sr=SR, target_sr=SR / stretch, res_type='soxr_hq')
+        log.info("Recording is %+.0f cents from A440 (confidence %.2f); retuned before note detection",
+                 offset * 100, confidence)
     stem_path = os.path.join(job_dir, 'stem.wav')
     sf.write(stem_path, target, SR)
     notes = detect_notes(stem_path, tuning=tuning)
+    if stretch != 1.0:
+        for n in notes:
+            n['start'] *= stretch
+            n['end'] *= stretch
     if lesson is not None:
         # Demucs already removes the voice; without it, notes "heard" in the
         # teacher's speech are dropped. Captions are too coarsely timed for this.
@@ -275,10 +340,13 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
         'tuning': {k: tuning[k] for k in ('id', 'name', 'capo', 'labels', 'notes', 'open_strings')},
         'video_type': video_type,
         'lesson': lesson,
+        'clip': clip,
+        'pitch_offset_cents': round(offset * 100),
+        'retuned': stretch != 1.0,
     }
 
 
-def listen_to_teacher(mix_path, tuning, captions, progress):
+def listen_to_teacher(mix_path, tuning, captions, progress, all_captions=None):
     """Tutorial mode: read the capo/tuning/chords the teacher mentions.
 
     Spoken settings only fill in what the user left at the defaults (standard
@@ -296,6 +364,11 @@ def listen_to_teacher(mix_path, tuning, captions, progress):
         segments, source = [], None
 
     hints = tutorial.extract_hints(segments, MAX_CAPO, set(TUNINGS))
+    if all_captions:
+        # Settings said outside the selected part still apply (e.g. "capo 2" in the intro).
+        whole = tutorial.extract_hints(all_captions, MAX_CAPO, set(TUNINGS))
+        hints['capo'] = hints['capo'] or whole['capo']
+        hints['tuning'] = hints['tuning'] or whole['tuning']
     applied, ignored = {}, {}
 
     heard = hints['tuning']
@@ -329,11 +402,74 @@ def listen_to_teacher(mix_path, tuning, captions, progress):
     }, tuning
 
 
-def decode_audio(source_path, job_dir):
-    """Normalise any input into a 44.1k stereo wav for analysis and an mp3 for playback."""
+def probe_duration(path):
+    """Length of a media file in seconds, or None if ffprobe can't tell."""
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        return float(out)
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+        return None
+
+
+def estimate_pitch_offset(y):
+    """How far the recording sits from A440: (semitones in [-0.5, 0.5), confidence 0..1).
+
+    Finds spectral peaks in the guitar's fundamental range at 1/10-semitone
+    resolution and takes the energy-weighted circular mean of where they sit
+    within their semitone. (librosa.estimate_tuning scatters across +-0.5 on
+    in-tune guitar recordings, so it can't be trusted to trigger a retune.)
+    """
+    try:
+        # Spread the analysis over the recording but cap the cost on long songs.
+        chunk = 30 * SR
+        if len(y) > TUNING_MAX_SECONDS * SR:
+            starts = np.linspace(0, len(y) - chunk, TUNING_MAX_SECONDS // 30).astype(int)
+            y = np.concatenate([y[i:i + chunk] for i in starts])
+        bins_per_octave = 12 * TUNING_BINS_PER_SEMITONE
+        fmin = librosa.note_to_hz('E2') * 2 ** (-0.5 / 12)
+        C = np.abs(librosa.cqt(y, sr=SR, fmin=fmin, n_bins=bins_per_octave * 4,
+                               bins_per_octave=bins_per_octave, hop_length=512))
+        energy = C.sum(0)
+        C = C[:, energy > np.percentile(energy, 30)]  # skip quiet frames
+        peaks = (C[1:-1] > C[:-2]) & (C[1:-1] >= C[2:]) & (C[1:-1] > C.max(0) * 10 ** (-25 / 20))
+        rows, cols = np.nonzero(peaks)
+        if rows.size < 50:
+            return 0.0, 0.0
+        rows = rows + 1
+        a, b, c = C[rows - 1, cols], C[rows, cols], C[rows + 1, cols]
+        curve = a - 2 * b + c
+        delta = np.where(curve < 0, 0.5 * (a - c) / np.where(curve < 0, curve, -1), 0)  # sub-bin peak position
+        pos = (rows + delta) / TUNING_BINS_PER_SEMITONE - 0.5  # fmin sits half a semitone below E2
+        z = np.sum(b * np.exp(2j * np.pi * (pos - np.round(pos)))) / np.sum(b)
+        return float(np.angle(z) / (2 * np.pi)), float(np.abs(z))
+    except Exception as e:  # silence, too short...
+        log.warning("Tuning estimate failed: %s", e)
+        return 0.0, 0.0
+
+
+def decode_audio(source_path, job_dir, start=0.0, end=None):
+    """Normalise any input into a 44.1k stereo wav for analysis and an mp3 for playback.
+
+    Only [start, end) is kept, capped at MAX_DURATION_S. Returns (mix_path, clip info);
+    clip['truncated'] is True when a long recording was cut to the first MAX_DURATION_S.
+    """
+    total = probe_duration(source_path)
+    if total is not None:
+        if total > MAX_SOURCE_S:
+            raise ProcessingError(f"This recording is {clock(total)} long; the most it can be cut from is {MAX_SOURCE_S // 3600} hours.")
+        if start >= total:
+            raise ProcessingError(f"The start time ({clock(start)}) is past the end of the recording ({clock(total)}).")
+        if end is not None and end > total:
+            end = total
+    wanted = (end - start) if end is not None else ((total - start) if total is not None else MAX_DURATION_S)
+    length = min(wanted, MAX_DURATION_S)
+
     mix_path = os.path.join(job_dir, 'mix.wav')
     cmd = [
-        'ffmpeg', '-y', '-v', 'error', '-i', source_path, '-vn', '-t', str(MAX_DURATION_S),
+        'ffmpeg', '-y', '-v', 'error', '-ss', f"{start:.3f}", '-i', source_path, '-vn', '-t', f"{length:.3f}",
         '-ac', '2', '-ar', str(MIX_SR), mix_path,
         '-ac', '2', '-ar', str(MIX_SR), '-b:a', '160k', os.path.join(job_dir, 'original.mp3'),
     ]
@@ -343,7 +479,13 @@ def decode_audio(source_path, job_dir):
         raise ProcessingError("ffmpeg is not installed (brew install ffmpeg).")
     except subprocess.CalledProcessError as e:
         raise ProcessingError(f"Could not decode audio: {e.stderr.strip()[-300:]}")
-    return mix_path
+    return mix_path, {
+        'start': round(start, 2),
+        'end': round(start + length, 2),
+        'source_duration': round(total, 2) if total is not None else None,
+        'truncated': wanted > MAX_DURATION_S + 0.5,
+        'is_part': start > 0 or (total is not None and start + length < total - 0.5),
+    }
 
 
 def isolate_guitar(mix_path):
@@ -374,12 +516,17 @@ def isolate_guitar(mix_path):
     rms = {k: float(np.sqrt(np.mean(v ** 2))) for k, v in stems.items()}
     log.info("Stem RMS: %s", {k: round(v, 4) for k, v in rms.items()})
 
-    # If Demucs found real guitar, use it; otherwise fall back to every pitched,
-    # non-vocal, non-bass stem (e.g. a piano- or synth-led song).
-    if rms['guitar'] >= 0.3 * max(rms['other'], rms['piano'], 1e-6):
+    # Use the guitar stem when it holds a fair share of the instrumental energy.
+    # Demucs often scatters dark, reverb-heavy or low guitar into the bass/piano/
+    # other stems; then the guitar stem alone is nearly empty, so keep everything
+    # except the voice instead.
+    instrumental = np.sqrt(sum(rms[k] ** 2 for k in rms if k not in ('vocals', 'drums')))
+    if rms['guitar'] >= 0.5 * instrumental:
         signal, desc = stems['guitar'], 'guitar'
-    else:
+    elif rms['guitar'] >= 0.3 * max(rms['other'], rms['piano'], 1e-6) and rms['bass'] < 1.5 * rms['guitar']:
         signal, desc = stems['guitar'] + stems['other'] + stems['piano'], 'guitar + other instruments'
+    else:
+        signal, desc = sum(v for k, v in stems.items() if k not in ('vocals', 'drums')), 'everything except vocals and drums'
 
     return librosa.resample(signal, orig_sr=MIX_SR, target_sr=SR), desc
 

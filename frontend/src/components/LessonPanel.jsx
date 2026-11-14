@@ -7,8 +7,16 @@ const SOURCE_LABEL = {
     'speech recognition': 'From speech recognition',
 };
 
+// Hints can come from outside the transcribed part (e.g. "capo 2" said in the
+// intro). Those show the time in the full video and can't be jumped to.
+const ClipContext = React.createContext({ offset: 0, length: Infinity });
+
 function Stamp({ at, onSeek }) {
-    return <button className="lesson__time" onClick={() => onSeek(at)} title="Jump here">{fmt(at)}</button>;
+    const { offset, length } = React.useContext(ClipContext);
+    if (at < -0.5 || at > length + 0.5) {
+        return <span className="lesson__time is-outside" title="Said outside the part you transcribed">{fmt(at + offset)} in video</span>;
+    }
+    return <button className="lesson__time" onClick={() => onSeek(Math.max(0, at))} title="Jump here">{fmt(Math.max(0, at))}</button>;
 }
 
 function Setting({ label, hint, value, onSeek, kept }) {
@@ -27,13 +35,14 @@ function Setting({ label, hint, value, onSeek, kept }) {
 const capoText = (v) => (v === 0 ? 'No capo' : `Capo ${v}`);
 
 /** What tutorial mode picked up from the teacher, with jump-to timestamps. */
-export default function LessonPanel({ lesson, onSeek }) {
+export default function LessonPanel({ lesson, clip, duration, onSeek }) {
     if (!lesson) return null;
     const { applied, ignored, chords, transcript, source, dropped_notes: dropped } = lesson;
     const heardNothing = !transcript.length;
     const nothingUseful = !applied.capo && !applied.tuning && !ignored.capo && !ignored.tuning && !chords.length;
 
     return (
+        <ClipContext.Provider value={{ offset: clip?.start || 0, length: duration ?? Infinity }}>
         <section className="lesson">
             <div className="lesson__head">
                 <p className="eyebrow" style={{ margin: 0 }}>From the lesson</p>
@@ -86,5 +95,6 @@ export default function LessonPanel({ lesson, onSeek }) {
                 </>
             )}
         </section>
+        </ClipContext.Provider>
     );
 }

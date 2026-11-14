@@ -115,6 +115,14 @@ const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onN
                     </span>
                 )}
                 <span className="chip">Source: {result.stem}</span>
+                {result.retuned && (
+                    <span
+                        className="chip chip--on"
+                        title={`The recording isn't at standard pitch (A = 440 Hz), so it was shifted onto it before the notes were detected. To play along with the original recording, tune your guitar to A = ${Math.round(440 * 2 ** (result.pitch_offset_cents / 1200))} Hz.`}
+                    >
+                        Recording {Math.abs(result.pitch_offset_cents)}¢ {result.pitch_offset_cents < 0 ? 'flat' : 'sharp'} · retuned
+                    </span>
+                )}
                 <div className="res__dl">
                     <a href={result.files.text} download className="tgl"><Download size={12} /> TXT</a>
                     <a href={result.files.midi} download className="tgl"><Download size={12} /> MIDI</a>

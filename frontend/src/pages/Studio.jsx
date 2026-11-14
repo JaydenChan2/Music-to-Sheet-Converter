@@ -41,6 +41,28 @@ function Processing() {
   );
 }
 
+const fmtClock = (sec) => {
+  const t = Math.round(sec);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), r = t % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`;
+};
+
+function ClipNotice({ clip }) {
+  if (!clip || !(clip.is_part || clip.truncated)) return null;
+  const span = `${fmtClock(clip.start)}–${fmtClock(clip.end)}`;
+  const total = clip.source_duration ? ` of ${fmtClock(clip.source_duration)}` : '';
+  return clip.truncated ? (
+    <div className="alert alert--warn" role="status">
+      <span>
+        This recording{total ? ` is ${fmtClock(clip.source_duration)} long, so` : ' is long, so'} only {span} was
+        transcribed. Set a start and end time to pick a different part.
+      </span>
+    </div>
+  ) : (
+    <p className="clip-note">Transcribed <strong>{span}</strong>{total}. Times below are counted from {fmtClock(clip.start)}.</p>
+  );
+}
+
 function Results() {
   const s = useStudio();
   return (
@@ -53,7 +75,9 @@ function Results() {
         <button className="btn btn--ghost btn--sm" onClick={s.reset}>New song</button>
       </div>
 
-      <LessonPanel lesson={s.result.lesson} onSeek={(t) => s.seekTo(t)} />
+      <ClipNotice clip={s.result.clip} />
+
+      <LessonPanel lesson={s.result.lesson} clip={s.result.clip} duration={s.result.duration} onSeek={(t) => s.seekTo(t)} />
 
       <TabViewer
         result={s.result}
@@ -115,6 +139,7 @@ export default function Studio() {
               onOptionChange={s.setOption}
               tunings={s.tunings}
               maxCapo={s.maxCapo}
+              maxDuration={s.maxDuration}
               separationAvailable={s.separationAvailable}
               speechAvailable={s.speechAvailable}
               error={s.error}

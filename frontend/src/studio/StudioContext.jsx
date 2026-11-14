@@ -35,6 +35,7 @@ export function StudioProvider({ children }) {
   const [options, setOptions] = useState(() => loadSaved(OPTIONS_KEY, DEFAULT_OPTIONS));
   const [tunings, setTunings] = useState([{ id: 'standard', name: 'Standard', notes: 'E A D G B E' }]);
   const [maxCapo, setMaxCapo] = useState(12);
+  const [maxDuration, setMaxDuration] = useState(720);
   const [separationAvailable, setSeparationAvailable] = useState(false);
   const [speechAvailable, setSpeechAvailable] = useState(false);
   const [backendUp, setBackendUp] = useState(null);
@@ -59,6 +60,7 @@ export function StudioProvider({ children }) {
         setSpeechAvailable(!!h.speech_available);
         if (h.tunings) setTunings(h.tunings);
         if (h.max_capo) setMaxCapo(h.max_capo);
+        if (h.max_duration) setMaxDuration(h.max_duration);
       })
       .catch(() => {
         setBackendUp(false);
@@ -155,8 +157,11 @@ export function StudioProvider({ children }) {
     }
   };
 
-  const transcribeFile = (file) => startJob(file.name, () => createJobFromFile(file, options), false);
-  const transcribeUrl = (url) => startJob(url, () => createJobFromUrl(url, options), true);
+  const rangeLabel = (r) => (r?.start || r?.end ? ` (${r.start || '0:00'}–${r.end || 'end'})` : '');
+  const transcribeFile = (file, range) =>
+    startJob(file.name + rangeLabel(range), () => createJobFromFile(file, { ...options, ...range }), false);
+  const transcribeUrl = (url, range) =>
+    startJob(url + rangeLabel(range), () => createJobFromUrl(url, { ...options, ...range }), true);
 
   const startPlaying = (mode = playback.mode) => {
     if (mode === 'synth') {
@@ -227,7 +232,7 @@ export function StudioProvider({ children }) {
     // job
     title, job, result, error, setError, isProcessing, transcribeFile, transcribeUrl, reset,
     // setup
-    options, setOption, tunings, maxCapo, separationAvailable, speechAvailable, backendUp,
+    options, setOption, tunings, maxCapo, maxDuration, separationAvailable, speechAvailable, backendUp,
     // playback
     playback, setPlaybackOption, isPlaying, currentTime, duration, loopBar, currentBar,
     togglePlay: () => (isPlaying ? stopPlaying() : startPlaying()),

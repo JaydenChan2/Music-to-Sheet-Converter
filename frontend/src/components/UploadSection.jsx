@@ -3,6 +3,22 @@ import { AlertCircle, FileAudio, Upload } from 'lucide-react';
 import { ArrowRight } from './site/primitives';
 
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'];
+// '95', '4:10' or '1:04:10' -> seconds; '' -> null; anything else -> NaN
+function parseClock(text) {
+    const t = text.trim();
+    if (!t) return null;
+    if (!/^\d+(\.\d+)?(:\d{1,2}(\.\d+)?){0,2}$/.test(t)) return NaN;
+    const parts = t.split(':').map(Number);
+    if (parts.slice(1).some((p) => p >= 60)) return NaN;
+    return parts.reduce((acc, p) => acc * 60 + p, 0);
+}
+
+const fmtClock = (sec) => {
+    const s = Math.round(sec);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`;
+};
+
 const CUSTOM_TUNING_PATTERN = /^\s*([A-Ga-g][#b♯♭]?\d?[\s,]+){5}[A-Ga-g][#b♯♭]?\d?\s*$/;
 
 const Tick = () => (
@@ -105,10 +121,24 @@ const GuitarSettings = ({ options, onOptionChange, tunings, maxCapo, separationA
     </div>
 );
 
-const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange, tunings, maxCapo, separationAvailable, speechAvailable, error }) => {
+const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange, tunings, maxCapo, maxDuration = 720, separationAvailable, speechAvailable, error }) => {
     const [isDragging, setIsDragging] = useState(false);
     const [localError, setLocalError] = useState(null);
     const [url, setUrl] = useState('');
+    const [range, setRange] = useState({ start: '', end: '' });
+
+    // Optional part of the recording to transcribe. Returns [error, {start, end}].
+    const checkRange = () => {
+        const start = parseClock(range.start);
+        const end = parseClock(range.end);
+        if (Number.isNaN(start)) return ['Start time should look like 4:10.'];
+        if (Number.isNaN(end)) return ['End time should look like 6:30.'];
+        if (end !== null && end <= (start || 0)) return ['The end time has to be after the start time.'];
+        if (end !== null && end - (start || 0) > maxDuration) {
+            return [`That part is ${fmtClock(end - (start || 0))} long; pick at most ${Math.round(maxDuration / 60)} minutes.`];
+        }
+        return [null, { start: range.start.trim(), end: range.end.trim() }];
+    };
     const fileInputRef = useRef(null);
     const shownError = localError || error;
 
@@ -132,9 +162,10 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
 
     const acceptFile = (file) => {
         setLocalError(null);
-        const validationError = validateOptions() || validateFile(file);
+        const [rangeError, picked] = checkRange();
+        const validationError = validateOptions() || rangeError || validateFile(file);
         if (validationError) setLocalError(validationError);
-        else onFileSelected(file);
+        else onFileSelected(file, picked);
     };
 
     const handleDrop = (e) => {
@@ -156,12 +187,13 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
             setLocalError('Please enter a valid http(s) link.');
             return;
         }
-        const optionsError = validateOptions();
+        const [rangeError, picked] = checkRange();
+        const optionsError = validateOptions() || rangeError;
         if (optionsError) {
             setLocalError(optionsError);
             return;
         }
-        onUrlSubmitted(trimmed);
+        onUrlSubmitted(trimmed, picked);
     };
 
     return (
@@ -178,6 +210,24 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
 
             <div className="setup__col">
                 <p className="setup__label"><b>03</b> Add a song</p>
+                <div className="range">
+                    <div className="fields fields--2">
+                        <label className="field">
+                            <span className="field__label">Start (optional)</span>
+                            <input className="input" inputMode="numeric" placeholder="0:00" value={range.start}
+                                onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))} />
+                        </label>
+                        <label className="field">
+                            <span className="field__label">End (optional)</span>
+                            <input className="input" inputMode="numeric" placeholder="end" value={range.end}
+                                onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))} />
+                        </label>
+                    </div>
+                    <p className="setup__hint">
+                        Only want part of it? Up to {Math.round(maxDuration / 60)} minutes are transcribed at a time —
+                        handy for long lessons, or just the solo.
+                    </p>
+                </div>
                 <div
                     className={`drop${isDragging ? ' is-over' : ''}`}
                     role="button"

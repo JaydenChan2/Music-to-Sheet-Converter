@@ -18,9 +18,13 @@ export async function getHealth() {
   return parse(await fetch(`${API}/health`));
 }
 
-// options: { videoType, separate, tuning, capo, customTuning }
-function jobOptions({ videoType, separate, tuning, capo, customTuning }) {
-  return { video_type: videoType || 'song', separate, tuning, capo, custom_tuning: tuning === 'custom' ? customTuning : '' };
+// options: { videoType, separate, tuning, capo, customTuning, start, end }
+function jobOptions({ videoType, separate, tuning, capo, customTuning, start, end }) {
+  return {
+    video_type: videoType || 'song', separate, tuning, capo,
+    custom_tuning: tuning === 'custom' ? customTuning : '',
+    start: start || '', end: end || '',
+  };
 }
 
 export async function createJobFromFile(file, options) {

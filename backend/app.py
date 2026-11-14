@@ -10,7 +10,8 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from audio_processor import MAX_CAPO, ProcessingError, resolve_tuning, separation_available, transcribe, tuning_presets
+from audio_processor import (MAX_CAPO, MAX_DURATION_S, ProcessingError, resolve_range, resolve_tuning,
+                             separation_available, transcribe, tuning_presets)
 from sources import download_audio, validate_url
 from tutorial import fetch_captions, speech_available
 
@@ -53,7 +54,7 @@ def run_job(job_id):
         source = job['_source']
         if job['_url']:
             update_job(job_id, stage='downloading', progress=0.02)
-            source, title = download_audio(job['_url'], job_dir)
+            source, title = download_audio(job['_url'], job_dir, has_range=job['_range'] != (0.0, None))
             update_job(job_id, title=title)
 
         captions = None
@@ -65,7 +66,8 @@ def run_job(job_id):
             update_job(job_id, stage=stage, progress=frac)
 
         result = transcribe(source, job_dir, separate=job['separate'], tuning=job['_tuning'], progress=progress,
-                            video_type=job['video_type'], captions=captions)
+                            video_type=job['video_type'], captions=captions,
+                            start=job['_range'][0], end=job['_range'][1])
         base = f"/api/jobs/{job_id}/files"
         result['files'] = {
             'original': f"{base}/original.mp3",
@@ -95,6 +97,7 @@ def health():
         'video_types': sorted(VIDEO_TYPES),
         'tunings': tuning_presets(),
         'max_capo': MAX_CAPO,
+        'max_duration': MAX_DURATION_S,
     })
 
 
@@ -108,6 +111,7 @@ def create_job():
     options = request.form if 'file' in request.files else (request.get_json(silent=True) or {})
     try:
         tuning = resolve_tuning(options.get('tuning', 'standard'), options.get('capo', 0), options.get('custom_tuning'))
+        clip_range = resolve_range(options.get('start'), options.get('end'))
     except ProcessingError as e:
         return jsonify({'error': str(e)}), 400
     video_type = options.get('video_type', 'song') or 'song'
@@ -139,7 +143,7 @@ def create_job():
             'id': job_id, 'status': 'running', 'stage': 'queued', 'progress': 0.0,
             'title': title, 'separate': separate and separation_available(), 'error': None, 'result': None,
             'tuning': tuning['name'], 'capo': tuning['capo'], 'video_type': video_type,
-            '_dir': job_dir, '_source': source, '_url': url, '_tuning': tuning,
+            '_dir': job_dir, '_source': source, '_url': url, '_tuning': tuning, '_range': clip_range,
         }
     executor.submit(run_job, job_id)
     return jsonify(job_view(jobs[job_id])), 202
