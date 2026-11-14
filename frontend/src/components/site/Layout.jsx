@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useStudio } from '../../studio/studio';
 import { useRevealAll } from './useRevealAll';
+import { useTheme } from './useTheme';
+import { Moon, Sun } from 'lucide-react';
 
 const BRAND = 'Guitar Tab AI';
 const REPO = 'https://github.com/JaydenChan2/Music-to-Sheet-Converter';
@@ -20,6 +22,7 @@ function navClass({ isActive }) {
 
 function Nav() {
   const { isProcessing } = useStudio();
+  const [theme, toggleTheme] = useTheme();
   const { pathname } = useLocation();
   // The menu is open only on the page it was opened from, so navigating closes it.
   const [openOn, setOpenOn] = useState(null);
@@ -66,6 +69,14 @@ function Nav() {
         <Link className="brand" to="/">{BRAND}</Link>
         <div className="nav__side nav__side--r">
           <NavLink className={navClass} to="/accuracy">Accuracy</NavLink>
+          <button
+            className="theme-btn"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={15} strokeWidth={1.5} /> : <Moon size={15} strokeWidth={1.5} />}
+          </button>
           <button className="burger" onClick={() => setOpen((o) => !o)} aria-label="Menu" aria-expanded={open}>
             <span /><span /><span />
           </button>

@@ -5,21 +5,42 @@ import { Download } from 'lucide-react';
 const STANDARD_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
 const SLIDE_MARKS = { up: '/', down: '\\' };
 
+// Drawn-staff geometry (px).
+const CH = 12;        // width of one character column; slots grow with their widest fret number
+const GAP = 24;       // distance between strings
+const TOP = 28;       // room above the top string for bar numbers
+const BOTTOM = 18;
+const PADX = 14;      // space after each bar line
+const LABEL_W = 30;   // gutter for string names
+const LINE_H = TOP + GAP * 5 + BOTTOM;
+
 // Lay out one measure as 16th-note slot columns. Each slot is as wide as its
-// widest fret number plus one dash, so rhythm stays readable.
+// widest fret number plus one column, so rhythm stays readable.
 function layoutMeasure(cells) {
+    let x = PADX;
     const slots = cells.map((slot) => {
-        const width = Math.max(1, ...slot.map((c) => (c ? c.text.length : 0))) + 1;
-        return { width, cells: slot.map((c) => ({ ...c, pad: '-'.repeat(width - (c ? c.text.length : 0)) })) };
+        const w = (Math.max(1, ...slot.map((c) => (c ? c.text.length : 0))) + 1) * CH;
+        const s = { x, w, center: x + w / 2, notes: slot.filter(Boolean) };
+        x += w;
+        return s;
     });
-    return { slots, width: slots.reduce((w, s) => w + s.width, 0) + 1 };
+    return { slots, width: x + PADX / 2 };
 }
 
-const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, children }) => {
+// x position of time t inside measure m, gliding from one slot centre to the next.
+function playheadX(m, t) {
+    const n = m.slots.length;
+    const pos = Math.max(0, Math.min(1, (t - m.start) / (m.end - m.start))) * n;
+    const i = Math.min(n - 1, Math.floor(pos));
+    const from = m.slots[i].center;
+    const to = i + 1 < n ? m.slots[i + 1].center : m.width;
+    return from + (pos - i) * (to - from);
+}
+
+const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onNoteClick, children }) => {
     const containerRef = useRef(null);
-    const charRef = useRef(null);
     const activeRef = useRef(null);
-    const [availableChars, setAvailableChars] = useState(100);
+    const [available, setAvailable] = useState(900);
 
     const measures = useMemo(() => {
         if (!result) return [];
@@ -31,21 +52,19 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, childr
             if (!measure) return;
             Object.entries(col.notes).forEach(([strIdx, fret]) => {
                 // "/5" = slid up into fret 5, "\3" = slid down into fret 3
-                const text = (SLIDE_MARKS[col.slides?.[strIdx]] || '') + fret;
-                measure[col.position][parseInt(strIdx)] = { text, fret, string: parseInt(strIdx) };
+                const slide = SLIDE_MARKS[col.slides?.[strIdx]];
+                const string = parseInt(strIdx);
+                measure[col.position][string] = { text: (slide || '') + fret, fret, string, slide: !!slide };
             });
         });
         return result.measures.map((m, i) => ({ ...m, ...layoutMeasure(cells[i]) }));
     }, [result]);
 
-    // Work out how many characters fit per line so measures wrap cleanly.
+    // Track the sheet's width so measures wrap cleanly onto lines.
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
-        const update = () => {
-            const charWidth = charRef.current?.getBoundingClientRect().width || 8.4;
-            setAvailableChars(Math.floor(el.clientWidth / charWidth));
-        };
+        const update = () => setAvailable(el.clientWidth - LABEL_W);
         update();
         const observer = new ResizeObserver(update);
         observer.observe(el);
@@ -55,27 +74,22 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, childr
     const lines = useMemo(() => {
         const out = [];
         let line = [];
-        const labelChars = 2 + Math.max(...(result?.tuning?.labels || STANDARD_LABELS).map((l) => l.length));
-        let width = labelChars;
+        let width = 0;
         measures.forEach((m) => {
-            const w = m.width;
-            if (line.length && width + w > availableChars) {
+            if (line.length && width + m.width > available) {
                 out.push(line);
                 line = [];
-                width = labelChars;
+                width = 0;
             }
             line.push(m);
-            width += w;
+            width += m.width;
         });
         if (line.length) out.push(line);
         return out;
-    }, [measures, availableChars, result]);
+    }, [measures, available]);
 
     const activeIndex = measures.findIndex((m) => currentTime >= m.start && currentTime < m.end);
-    const active = measures[activeIndex];
-    const activeSlot = active
-        ? Math.floor(((currentTime - active.start) / (active.end - active.start)) * active.slots.length)
-        : -1;
+    const showPlayhead = activeIndex >= 0 && (isPlaying || currentTime > 0);
 
     useEffect(() => {
         if (isPlaying && activeRef.current) {
@@ -84,7 +98,6 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, childr
     }, [activeIndex, isPlaying]);
 
     const labels = result?.tuning?.labels || STANDARD_LABELS;
-    const labelWidth = Math.max(...labels.map((l) => l.length));
 
     if (!result) return null;
 
@@ -110,49 +123,49 @@ const TabViewer = ({ result, currentTime, isPlaying, onSeek, onNoteClick, childr
 
             {children}
 
-            <div className="sheet select-text">
+            <div className="sheet">
                 <div ref={containerRef} className="sheet__inner">
-                    <span ref={charRef} style={{ position: 'absolute', visibility: 'hidden' }}>0</span>
                     {result.note_count === 0 && (
                         <p className="sheet__empty">No guitar notes were detected in this audio.</p>
                     )}
                     {result.note_count > 0 && lines.map((line, lineIdx) => (
-                        <div key={lineIdx} className="sheet__line">
-                            <div className="sheet__labels">
-                                {labels.map((n, i) => <div key={i}>{n.padStart(labelWidth)}|</div>)}
-                            </div>
-                            {line.map((m) => {
+                        <div key={lineIdx} className="staff" style={{ height: LINE_H, paddingLeft: LABEL_W }}>
+                            {labels.map((name, r) => (
+                                <React.Fragment key={r}>
+                                    <i className="staff__string" style={{ top: TOP + r * GAP, left: LABEL_W, width: line.reduce((w, m) => w + m.width, 0) }} />
+                                    <span className="staff__label" style={{ top: TOP + r * GAP }}>{name}</span>
+                                </React.Fragment>
+                            ))}
+                            {line.map((m, mi) => {
                                 const isActive = m.index === activeIndex;
+                                const isLoop = m.index === loopBar;
                                 return (
                                     <div
                                         key={m.index}
                                         ref={isActive ? activeRef : null}
                                         onClick={() => onSeek?.(Math.max(0, m.start))}
                                         title={`Bar ${m.index + 1}`}
-                                        className={`sheet__bar${isActive ? ' is-on' : ''}`}
+                                        className={`bar${mi === 0 ? ' bar--first' : ''}${isActive ? ' is-on' : ''}${isLoop ? ' is-loop' : ''}`}
+                                        style={{ width: m.width, '--top': `${TOP}px`, '--span': `${GAP * 5}px` }}
                                     >
-                                        {m.slots.map((slot, si) => (
-                                            <div key={si} className={isActive && si === activeSlot && isPlaying ? 'sheet__slot is-on' : 'sheet__slot'}>
-                                                {slot.cells.map((cell, r) => (
-                                                    <div key={r}>
-                                                        {cell && cell.text ? (
-                                                            <span
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    onNoteClick?.(cell.string, cell.fret);
-                                                                }}
-                                                                title="Play this note"
-                                                                className="sheet__note"
-                                                            >
-                                                                {cell.text}
-                                                            </span>
-                                                        ) : null}
-                                                        {cell.pad}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ))}
-                                        <div>{Array.from({ length: 6 }, (_, r) => <div key={r}>|</div>)}</div>
+                                        <span className="bar__num">{m.index + 1}</span>
+                                        {m.slots.map((s) => s.notes.map((note) => (
+                                            <button
+                                                key={`${s.x}-${note.string}`}
+                                                className={`note${note.slide ? ' note--slide' : ''}`}
+                                                style={{ left: s.center, top: TOP + note.string * GAP }}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onNoteClick?.(note.string, note.fret);
+                                                }}
+                                                title="Play this note"
+                                            >
+                                                {note.text}
+                                            </button>
+                                        )))}
+                                        {isActive && showPlayhead && (
+                                            <i className="playhead" style={{ transform: `translateX(${playheadX(m, currentTime)}px)` }} />
+                                        )}
                                     </div>
                                 );
                             })}

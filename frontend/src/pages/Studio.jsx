@@ -56,6 +56,7 @@ function Results() {
         result={s.result}
         currentTime={s.currentTime}
         isPlaying={s.isPlaying}
+        loopBar={s.loopBar}
         onSeek={(t) => s.seekTo(t)}
         onNoteClick={s.auditionNote}
       >

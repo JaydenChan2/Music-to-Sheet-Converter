@@ -225,7 +225,7 @@ export default function Home() {
       {/* 12 · band */}
       <section className="band media">
         <TabStaff dur={80} showLabels={false} />
-        <div className="scrim scrim--full" style={{ background: 'rgba(255,255,255,.82)' }} />
+        <div className="scrim scrim--full" style={{ background: 'rgba(var(--wash), .82)' }} />
         <div className="band__inner">
           <p className="eyebrow">Start here</p>
           <h2 className="h2" data-reveal>One song<br />at a time</h2>
