@@ -37,7 +37,7 @@ function playheadX(m, t) {
     return from + (pos - i) * (to - from);
 }
 
-const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onNoteClick, children }) => {
+const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, check = null, removedNotes = null, onSeek, onNoteClick, children }) => {
     const containerRef = useRef(null);
     const activeRef = useRef(null);
     const [available, setAvailable] = useState(900);
@@ -54,11 +54,22 @@ const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onN
                 // "/5" = slid up into fret 5, "\3" = slid down into fret 3
                 const slide = SLIDE_MARKS[col.slides?.[strIdx]];
                 const string = parseInt(strIdx);
-                measure[col.position][string] = { text: (slide || '') + fret, fret, string, slide: !!slide };
+                measure[col.position][string] = {
+                    text: (slide || '') + fret, fret, string, slide: !!slide,
+                    confidence: col.confidence?.[strIdx],
+                };
             });
         });
+        // Notes the check step hid: shown as ghosts only where the slot is free.
+        (removedNotes || []).forEach((r) => {
+            const string = parseInt(r.string);
+            const slot = cells[r.measure]?.[r.position];
+            if (slot && !slot[string]) {
+                slot[string] = { text: String(r.fret), fret: r.fret, string, removed: true, confidence: r.confidence };
+            }
+        });
         return result.measures.map((m, i) => ({ ...m, ...layoutMeasure(cells[i]) }));
-    }, [result]);
+    }, [result, removedNotes]);
 
     // Track the sheet's width so measures wrap cleanly onto lines.
     useEffect(() => {
@@ -98,6 +109,8 @@ const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onN
     }, [activeIndex, isPlaying]);
 
     const labels = result?.tuning?.labels || STANDARD_LABELS;
+    const noteLimit = check?.thresholds?.note ?? 0;
+    const flaggedBars = new Set(check?.flagged_bars || []);
 
     if (!result) return null;
 
@@ -147,26 +160,31 @@ const TabViewer = ({ result, currentTime, isPlaying, loopBar = null, onSeek, onN
                             {line.map((m, mi) => {
                                 const isActive = m.index === activeIndex;
                                 const isLoop = m.index === loopBar;
+                                const isFlagged = flaggedBars.has(m.index);
                                 return (
                                     <div
                                         key={m.index}
                                         ref={isActive ? activeRef : null}
                                         onClick={() => onSeek?.(Math.max(0, m.start))}
                                         title={`Bar ${m.index + 1}`}
-                                        className={`bar${mi === 0 ? ' bar--first' : ''}${isActive ? ' is-on' : ''}${isLoop ? ' is-loop' : ''}`}
+                                        className={`bar${mi === 0 ? ' bar--first' : ''}${isActive ? ' is-on' : ''}${isLoop ? ' is-loop' : ''}${isFlagged ? ' is-flagged' : ''}`}
                                         style={{ width: m.width, '--top': `${TOP}px`, '--span': `${GAP * 5}px` }}
                                     >
-                                        <span className="bar__num">{m.index + 1}</span>
+                                        <span className="bar__num">{m.index + 1}{isFlagged && <b title="Double-check this bar"> ?</b>}</span>
                                         {m.slots.map((s) => s.notes.map((note) => (
                                             <button
                                                 key={`${s.x}-${note.string}`}
-                                                className={`note${note.slide ? ' note--slide' : ''}`}
+                                                className={`note${note.slide ? ' note--slide' : ''}${note.removed ? ' note--removed' : note.confidence != null && note.confidence < noteLimit ? ' note--unsure' : ''}`}
                                                 style={{ left: s.center, top: TOP + note.string * GAP }}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     onNoteClick?.(note.string, note.fret);
                                                 }}
-                                                title="Play this note"
+                                                title={note.removed
+                                                    ? `Hidden by the tab check (${Math.round(note.confidence * 100)}% confidence) · click to hear it`
+                                                    : note.confidence != null
+                                                    ? `Play this note · ${Math.round(note.confidence * 100)}% confidence${note.confidence < (check?.thresholds?.note ?? 0.6) ? ' — double-check' : ''}`
+                                                    : 'Play this note'}
                                             >
                                                 {note.text}
                                             </button>

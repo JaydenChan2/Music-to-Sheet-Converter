@@ -24,6 +24,7 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+SLOTS_PER_MEASURE = 16  # matches audio_processor (4/4 on a 16th-note grid)
 HOP = 256
 BINS_PER_SEMITONE = 3
 MIDI_LO, MIDI_HI = 28, 100  # analysis range incl. neighbours and overtones
@@ -35,19 +36,23 @@ FEATURES = ['distinct', 'presence', 'attack', 'octave_below', 'timing', 'amp', '
 
 # Logistic model P(correct) = sigmoid(BIAS + sum(w * standardised feature)).
 # Fitted on the 20 GuitarSet validation clips by benchmark_verify.py --fit.
-MODEL = {
-    'mean': [0.0] * len(FEATURES),
-    'scale': [1.0] * len(FEATURES),
-    'weights': [1.0, 1.0, 0.5, -0.5, -0.5, 1.0, -0.2, 0.0],
-    'bias': 0.0,
+MODEL = {  # cross-validated AUC 0.842 on 3009 validation notes
+    'mean': [1.3027, -4.2753, 0.7181, -2.1714, 0.0308, 0.6325, 2.0794, 0.4408],
+    'scale': [0.5982, 5.6736, 0.7013, 1.099, 0.0184, 0.1295, 1.1261, 0.1988],
+    'weights': [0.0366, -0.0024, 0.3074, -0.1589, -1.0844, 1.0529, 0.4332, -0.0179],
+    'bias': 1.2287,
 }
 
 # Refinement thresholds, chosen on the validation clips (benchmark_verify.py --tune).
-REPITCH_RATIO = None  # move to a neighbour semitone when it's this many times stronger (None = off)
-DROP_BELOW = None  # drop notes with P(correct) below this (None = off)
+REPITCH_RATIO = None  # move to a neighbour semitone when it's this many times stronger (None = off;
+                      # it gave no gain on GuitarSet, where off-pitch audio is handled by the retune step)
+DROP_BELOW = 0.4  # drop notes with P(correct) below this (validation F1 69.7% -> 72.3%; 0.45 peaked
+                 # at 72.4%, but real songs differ from GuitarSet so this stays a little conservative)
 
-UNSURE_NOTE = 0.5  # notes below this are flagged in the tab
-UNSURE_BAR = 0.55  # bars whose average falls below this go on the double-check list
+# Flag thresholds, chosen on validation: notes under 0.6 are right only ~55-60% of the
+# time; bars averaging under 0.7 (~8% of bars) have ~60% of notes right vs ~84% elsewhere.
+UNSURE_NOTE = 0.6
+UNSURE_BAR = 0.7
 
 
 class Evidence:
@@ -114,15 +119,21 @@ def confidence(feats):
 
 
 def refine(events, ev_audio, stretch, tuning):
-    """Correct or drop notes the audio doesn't support. Returns change counts.
+    """Correct or drop notes the audio doesn't support.
 
+    Returns (change counts, removed notes). Removed notes keep the string/fret
+    they had before refinement, so the user can still see and restore them.
     Fingerings must be re-assigned by the caller afterwards.
     """
     changes = {'repitched': 0, 'removed': 0}
+    removed = []
     if REPITCH_RATIO is None and DROP_BELOW is None:
-        return changes
+        return changes, removed
     for ev in events:
+        if ev.get('video_fingering'):
+            continue  # read from the on-screen tab: trust it over the audio evidence
         kept = []
+        placed = {tuning['open_strings'][st] + fr: (st, fr) for st, fr in ev.get('fingering', ())}
         pitches = {int(n['pitch']) for n in ev['notes']}
         for n in ev['notes']:
             p = int(n['pitch'])
@@ -139,13 +150,17 @@ def refine(events, ev_audio, stretch, tuning):
                     n.pop('slide_from', None)
                     changes['repitched'] += 1
             if DROP_BELOW is not None:
-                if confidence(note_features(ev['time'], n, len(ev['notes']), ev_audio, stretch)) < DROP_BELOW:
+                c = confidence(note_features(ev['time'], n, len(ev['notes']), ev_audio, stretch))
+                if c < DROP_BELOW:
                     changes['removed'] += 1
+                    if int(n['pitch']) in placed:
+                        string, fret = placed[int(n['pitch'])]
+                        removed.append({'slot': ev['slot'], 'string': string, 'fret': fret, 'confidence': round(c, 2)})
                     continue
             kept.append(n)
         ev['notes'] = kept
     events[:] = [ev for ev in events if ev['notes']]
-    return changes
+    return changes, removed
 
 
 def score(events, ev_audio, stretch, measures, open_strings):
@@ -160,9 +175,12 @@ def score(events, ev_audio, stretch, measures, open_strings):
             if n is None:
                 continue
             c = confidence(note_features(ev['time'], n, len(ev['notes']), ev_audio, stretch))
+            if ev.get('video_fingering'):
+                # confirmed by the on-screen tab: as sure as the match itself
+                c = max(c, 0.5 + 0.5 * ev.get('video_match', 0.5))
             ev['confidence'][string] = round(c, 2)
             all_conf.append(c)
-            per_measure.setdefault(ev['slot'] // 16, []).append(c)
+            per_measure.setdefault(ev['slot'] // SLOTS_PER_MEASURE, []).append(c)
 
     bars = []
     for m in measures:
@@ -175,9 +193,10 @@ def score(events, ev_audio, stretch, measures, open_strings):
     overall = float(np.mean(all_conf)) if all_conf else 0.0
     return {
         'overall': round(overall, 2),
-        'label': 'high' if overall >= 0.7 else 'medium' if overall >= 0.5 else 'low',
+        'label': 'high' if overall >= 0.8 else 'medium' if overall >= 0.65 else 'low',
         'unsure_notes': int(sum(c < UNSURE_NOTE for c in all_conf)),
         'total_notes': len(all_conf),
         'bars': bars,
         'flagged_bars': [b['index'] for b in bars if b['confidence'] < UNSURE_BAR],
+        'thresholds': {'note': UNSURE_NOTE, 'bar': UNSURE_BAR},
     }

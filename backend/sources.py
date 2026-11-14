@@ -53,4 +53,35 @@ def download_audio(url, dest_dir, has_range=False):
     if not os.path.exists(path):
         raise ProcessingError("The download didn't produce an audio file (the file may be over 200 MB, "
                               "or the site blocked the download).")
+    # keep the title/description: they often state the tuning or capo ("Drop D", "Capo 2")
+    with open(os.path.join(dest_dir, 'description.txt'), 'w', encoding='utf-8') as f:
+        f.write((info.get('title') or '') + '\n' + (info.get('description') or ''))
     return path, info.get('title') or 'Linked track'
+
+
+def download_video(url, dest_dir):
+    """Download the picture (no audio, at most 720p) for reading on-screen tabs."""
+    import yt_dlp
+    opts = {
+        'format': 'bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]/best[height<=720]',
+        'outtmpl': os.path.join(dest_dir, 'video.%(ext)s'),
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'max_filesize': 400 * 1024 * 1024,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            path = ydl.prepare_filename(info)
+    except yt_dlp.utils.DownloadError as e:
+        raise ProcessingError(f"Couldn't download the video picture: {str(e).replace('ERROR: ', '')[:300]}")
+    return path if os.path.exists(path) else None
+
+
+def has_video(path):
+    import subprocess
+    out = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_type',
+                          '-of', 'csv=p=0', path], capture_output=True, text=True).stdout
+    return 'video' in out

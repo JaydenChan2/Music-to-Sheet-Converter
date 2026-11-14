@@ -30,7 +30,7 @@ const Tick = () => (
 const VIDEO_TYPES = [
     { id: 'song', title: 'Song', text: 'A recording or performance. Transcribes what it hears.' },
     { id: 'tutorial', title: 'Tutorial', text: 'A lesson with talking. Uses the capo, tuning and chords the teacher mentions.' },
-    { id: 'tab', title: 'Tabs on screen', text: 'Reads the tab shown in the video.', soon: true },
+    { id: 'tab', title: 'Tabs on screen', text: 'A video that shows the tab. Takes strings and frets from the picture.' },
 ];
 
 const VideoTypePicker = ({ value, onChange, speechAvailable }) => (
@@ -52,6 +52,12 @@ const VideoTypePicker = ({ value, onChange, speechAvailable }) => (
                 </button>
             ))}
         </div>
+        {value === 'tab' && (
+            <p className="setup__hint">
+                Works with play-along and lesson videos that show a six-line tab staff. Strings and frets are read from the
+                picture, timing from the audio. Paste a link, or upload a video file (not just audio).
+            </p>
+        )}
         {value === 'tutorial' && (
             <p className="setup__hint">
                 {speechAvailable

@@ -12,7 +12,7 @@ from werkzeug.utils import secure_filename
 
 from audio_processor import (MAX_CAPO, MAX_DURATION_S, ProcessingError, resolve_range, resolve_tuning,
                              separation_available, transcribe, tuning_presets)
-from sources import download_audio, validate_url
+from sources import download_audio, download_video, has_video, validate_url
 from tutorial import fetch_captions, speech_available
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -23,9 +23,8 @@ JOBS_DIR = os.path.join(BASE_DIR, 'jobs')
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'}
-SERVED_FILES = {'original.mp3', 'transcription.mid', 'tab.txt'}
-# 'tab' (reading tabs shown in the video) is planned but not built yet.
-VIDEO_TYPES = {'song', 'tutorial'}
+SERVED_FILES = {'original.mp3', 'transcription.mid', 'tab.txt', 'tabframe.jpg'}
+VIDEO_TYPES = {'song', 'tutorial', 'tab'}
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
@@ -46,6 +45,14 @@ def job_view(job):
     return {k: v for k, v in job.items() if not k.startswith('_')}
 
 
+def _read_text(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def run_job(job_id):
     job = jobs[job_id]
     job_dir = job['_dir']
@@ -57,6 +64,13 @@ def run_job(job_id):
             source, title = download_audio(job['_url'], job_dir, has_range=job['_range'] != (0.0, None))
             update_job(job_id, title=title)
 
+        video_path = None
+        if job['video_type'] == 'tab':
+            update_job(job_id, stage='downloading', progress=0.03)
+            video_path = download_video(job['_url'], job_dir) if job['_url'] else source
+            if not video_path or not has_video(video_path):
+                raise ProcessingError("Tabs on screen needs a video with the tab in it; this file has no picture.")
+
         captions = None
         if job['video_type'] == 'tutorial' and job['_url']:
             update_job(job_id, stage='listening', progress=0.04)
@@ -67,13 +81,16 @@ def run_job(job_id):
 
         result = transcribe(source, job_dir, separate=job['separate'], tuning=job['_tuning'], progress=progress,
                             video_type=job['video_type'], captions=captions,
-                            start=job['_range'][0], end=job['_range'][1])
+                            start=job['_range'][0], end=job['_range'][1], video_path=video_path,
+                            description=_read_text(os.path.join(job_dir, 'description.txt')))
         base = f"/api/jobs/{job_id}/files"
         result['files'] = {
             'original': f"{base}/original.mp3",
             'midi': f"{base}/transcription.mid",
             'text': f"{base}/tab.txt",
         }
+        if (result.get('video_tab') or {}).get('frame_image'):
+            result['files']['tab_frame'] = f"{base}/tabframe.jpg"
         update_job(job_id, status='done', stage='done', progress=1.0, result=result)
         log.info("Job %s finished in %.1fs (%d notes)", job_id, time.time() - started, result['note_count'])
     except ProcessingError as e:

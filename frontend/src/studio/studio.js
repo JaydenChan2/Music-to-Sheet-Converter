@@ -8,6 +8,8 @@ export const STAGES = [
   { id: 'separating', label: 'Isolate', detail: 'Isolating the guitar from the mix' },
   { id: 'transcribing', label: 'Detect', detail: 'Detecting notes and chords' },
   { id: 'arranging', label: 'Arrange', detail: 'Finding the beat and choosing fingerings' },
+  { id: 'reading', label: 'Read tab', detail: 'Reading the tab on screen', tabOnly: true },
+  { id: 'verifying', label: 'Check', detail: 'Checking the tab against the recording' },
   { id: 'rendering', label: 'Render', detail: 'Writing tab and MIDI' },
 ];
 

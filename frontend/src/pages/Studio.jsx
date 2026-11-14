@@ -1,9 +1,11 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import UploadSection from '../components/UploadSection';
 import TabViewer from '../components/TabViewer';
 import PlaybackControls from '../components/PlaybackControls';
 import SynthPanel from '../components/SynthPanel';
 import LessonPanel from '../components/LessonPanel';
+import CheckPanel from '../components/CheckPanel';
+import VideoTabPanel, { TitleNotice } from '../components/VideoTabPanel';
 import { STAGES, useStudio } from '../studio/studio';
 
 function Status() {
@@ -18,7 +20,7 @@ function Status() {
 
 function Processing() {
   const { job, title } = useStudio();
-  const stages = STAGES.filter((s) => s.id !== 'queued' && (!s.tutorialOnly || job.video_type === 'tutorial') && (s.id !== 'downloading' || job.from_link));
+  const stages = STAGES.filter((s) => s.id !== 'queued' && (!s.tutorialOnly || job.video_type === 'tutorial') && (!s.tabOnly || job.video_type === 'tab') && (s.id !== 'downloading' || job.from_link));
   const nowIdx = stages.findIndex((s) => s.id === job.stage);
   const now = STAGES.find((s) => s.id === job.stage);
   return (
@@ -65,6 +67,9 @@ function ClipNotice({ clip }) {
 
 function Results() {
   const s = useStudio();
+  const [showUnsure, setShowUnsure] = useState(true);
+  const [showRemoved, setShowRemoved] = useState(false);
+  const check = s.result.verification;
   return (
     <div>
       <div className="res__bar">
@@ -76,6 +81,18 @@ function Results() {
       </div>
 
       <ClipNotice clip={s.result.clip} />
+      <TitleNotice fromTitle={s.result.from_title} />
+
+      <VideoTabPanel info={s.result.video_tab} frameUrl={s.result.files.tab_frame} />
+
+      <CheckPanel
+        check={check}
+        showUnsure={showUnsure}
+        onToggleUnsure={setShowUnsure}
+        showRemoved={showRemoved}
+        onToggleRemoved={setShowRemoved}
+        onSeekBar={(b) => s.seekTo(Math.max(0, b.start))}
+      />
 
       <LessonPanel lesson={s.result.lesson} clip={s.result.clip} duration={s.result.duration} onSeek={(t) => s.seekTo(t)} />
 
@@ -84,6 +101,8 @@ function Results() {
         currentTime={s.currentTime}
         isPlaying={s.isPlaying}
         loopBar={s.loopBar}
+        check={showUnsure ? check : null}
+        removedNotes={showRemoved ? check?.removed_notes : null}
         onSeek={(t) => s.seekTo(t)}
         onNoteClick={s.auditionNote}
       >

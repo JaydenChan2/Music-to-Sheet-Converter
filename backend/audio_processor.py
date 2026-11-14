@@ -19,7 +19,9 @@ import librosa
 import numpy as np
 import soundfile as sf
 
+import tabvision
 import tutorial
+import verify
 
 log = logging.getLogger(__name__)
 
@@ -241,7 +243,7 @@ def _get_demucs():
 # ---------------------------------------------------------------------------
 
 def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda stage, frac: None,
-               video_type='song', captions=None, start=0.0, end=None):
+               video_type='song', captions=None, start=0.0, end=None, video_path=None, description=None):
     """Run the full pipeline. Writes artifacts into job_dir and returns the result dict.
 
     video_type='tutorial' also listens to the teacher (captions or local speech
@@ -264,6 +266,10 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     duration = len(mix) / SR
     if duration < 0.5 or np.max(np.abs(mix)) < 1e-4:
         raise ProcessingError("The audio is empty or silent.")
+
+    # The video's title/description often names the tuning or capo ("Drop D",
+    # "Capo 2"); like everything heard or read, it only fills in the defaults.
+    from_title, tuning = settings_from_description(description, tuning)
 
     lesson = None
     if video_type == 'tutorial':
@@ -289,7 +295,11 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
                  offset * 100, confidence)
     stem_path = os.path.join(job_dir, 'stem.wav')
     sf.write(stem_path, target, SR)
-    notes = detect_notes(stem_path, tuning=tuning)
+    # In tabs-on-screen mode the tab may turn out to be in a dropped tuning, so
+    # listen below the chosen tuning's lowest string too (unplayable notes are
+    # dropped later, when fingerings are assigned).
+    listen = {**tuning, 'low': min(tuning['low'], 36)} if video_type == 'tab' else tuning
+    notes = detect_notes(stem_path, tuning=listen)
     if stretch != 1.0:
         for n in notes:
             n['start'] *= stretch
@@ -305,9 +315,30 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
     tempo, grid = beat_grid(mix, duration, notes)
     events = quantize(notes, grid)
     events, grid = trim_leading_measures(events, grid)
-    assign_fingerings(events, tuning)
 
+    on_screen = None
+    if video_type == 'tab' and video_path:
+        on_screen, tuning = read_tab_from_video(video_path, job_dir, clip, events, tuning, progress)
+    assign_fingerings(events, tuning)
+    if on_screen:
+        apply_video_fingerings(events, tuning)
+
+    # Cross-check the finished tab against the audio: fix what the evidence
+    # clearly contradicts, then score every note and bar.
+    progress('verifying', 0.9)
+    evidence = verify.Evidence(target, SR)
+    changes, removed = verify.refine(events, evidence, stretch, tuning)
+    if changes['repitched'] or changes['removed']:
+        assign_fingerings(events, tuning)
     measures = build_measures(events, grid)
+    report = verify.score(events, evidence, stretch, measures, tuning['open_strings'])
+    report['changes'] = changes
+    report['removed_notes'] = [
+        {'measure': r['slot'] // SLOTS_PER_MEASURE, 'position': r['slot'] % SLOTS_PER_MEASURE,
+         'string': str(5 - r['string']), 'fret': r['fret'], 'confidence': r['confidence']}
+        for r in removed
+    ]
+
     tabs = [
         {
             'time': ev['time'],
@@ -318,6 +349,10 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
             'notes': {str(5 - s): f for s, f in ev['fingering']},
             'slides': {str(5 - s): d for s, d in ev.get('slides', {}).items()},
             'velocities': _velocities(ev, tuning['open_strings']),
+            'confidence': {str(5 - s): c for s, c in ev.get('confidence', {}).items()},
+            'refined': [str(5 - s) for s, f in ev['fingering']
+                        if any(n.get('refined_from') is not None and n['pitch'] == tuning['open_strings'][s] + f
+                               for n in ev['notes'])],
         }
         for ev in events if ev['fingering']
     ]
@@ -342,8 +377,84 @@ def transcribe(source_path, job_dir, separate=True, tuning=None, progress=lambda
         'lesson': lesson,
         'clip': clip,
         'pitch_offset_cents': round(offset * 100),
+        'verification': report,
+        'video_tab': on_screen,
+        'from_title': from_title,
         'retuned': stretch != 1.0,
     }
+
+
+def settings_from_description(text, tuning):
+    """Capo/tuning named in a video's title or description. Returns (applied, tuning)."""
+    if not text:
+        return {}, tuning
+    first_lines = '\n'.join(text.splitlines()[:40])  # title + top of the description
+    hints = tutorial.extract_hints([{'start': 0.0, 'end': 0.0, 'text': first_lines}], MAX_CAPO, set(TUNINGS))
+    applied = {}
+    if hints['tuning'] and tuning['id'] == 'standard' and hints['tuning']['value'] != 'standard':
+        name, strings = TUNINGS[hints['tuning']['value']]
+        tuning = build_tuning(hints['tuning']['value'], name, strings, tuning['capo'])
+        applied['tuning'] = {'name': name, 'quote': hints['tuning']['quote']}
+    if hints['capo'] and hints['capo']['value'] and tuning['capo'] == 0:
+        tuning = build_tuning(tuning['id'], tuning['name'], tuning['strings'], hints['capo']['value'])
+        applied['capo'] = {'value': hints['capo']['value'], 'quote': hints['capo']['quote']}
+    if applied:
+        log.info("Settings from the video description: %s", applied)
+    return applied, tuning
+
+
+def read_tab_from_video(video_path, job_dir, clip, events, tuning, progress):
+    """Tabs-on-screen mode: read the tab in the video and take string/fret from it
+    for every heard note it matches. Returns (report, possibly updated tuning)."""
+    progress('reading', 0.86)
+    video = tabvision.read_video(
+        video_path, clip['start'], clip['end'] - clip['start'],
+        progress=lambda f: progress('reading', 0.86 + 0.03 * f),
+        debug_frame_path=os.path.join(job_dir, 'tabframe.jpg'),
+    )
+    report = {
+        'frames_read': video['frames_read'],
+        'frames_with_tab': video['frames_with_tab'],
+        'bars_read': len(video['bars']),
+        'numbered': video['numbered'],
+        'events': len(events),
+        'matched': 0,
+        'tuning_from_video': None,
+        'frame_image': os.path.exists(os.path.join(job_dir, 'tabframe.jpg')),
+    }
+    if not video['bars'] or not events:
+        return report, tuning
+
+    # Which tuning/capo makes the on-screen tab agree with what's heard? Only
+    # replaces what the user left at the defaults (standard tuning, no capo).
+    candidates = {tuning['id']: tuning['strings']}
+    if tuning['id'] == 'standard':
+        candidates.update({k: v for k, (_, v) in TUNINGS.items()})
+    best_id, shift, rate = tabvision.fit_tuning(
+        events, video, {k: [m + tuning['capo'] for m in v] for k, v in candidates.items()})
+    current = tabvision.fit_tuning(events, video, {tuning['id']: tuning['open_strings']}, shifts=[0])
+    if best_id is not None and (best_id, shift) != (tuning['id'], 0) and rate >= current[2] + 0.1:
+        new_capo = tuning['capo'] + shift
+        if 0 <= new_capo <= MAX_CAPO and (tuning['capo'] == 0 or shift == 0):
+            name, strings = (tuning['name'], tuning['strings']) if best_id == tuning['id'] else TUNINGS[best_id]
+            tuning = build_tuning(best_id, name, strings, new_capo)
+            report['tuning_from_video'] = {'id': best_id, 'name': name, 'capo': new_capo,
+                                           'agreement': round(rate, 2)}
+    report['matched'], _ = tabvision.fuse(events, video, tuning['open_strings'])
+    report['match_rate'] = round(report['matched'] / max(1, len(events)), 2)
+    log.info("Tab video: %d frames, %d bars read, %d/%d events matched, tuning %s",
+             video['frames_read'], len(video['bars']), report['matched'], len(events), report['tuning_from_video'])
+    return report, tuning
+
+
+def apply_video_fingerings(events, tuning):
+    """Use the string/fret the video shows (where it is playable) instead of the
+    Viterbi choice."""
+    for ev in events:
+        fixed = ev.get('video_fingering')
+        if fixed and all(0 <= f <= tuning['max_fret'] for _, f in fixed):
+            ev['fingering'] = fixed
+    link_slides(events, tuning['open_strings'])
 
 
 def listen_to_teacher(mix_path, tuning, captions, progress, all_captions=None):

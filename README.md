@@ -85,7 +85,7 @@ npm run dev
 2.  **Access App**: Open `http://localhost:5173` in your browser.
 3.  **Set up your guitar**: pick the tuning used in the recording (Standard, Drop D, half/whole step down, Drop C/C#, Open G/D/E, DADGAD, or a custom one like `D A D G B E`) and the capo fret, if any. With a capo, frets are written relative to the capo. Your choice is remembered.
 4.  **Add a song**: drop an audio file (MP3, WAV, M4A, FLAC, OGG, MP4...) or paste a link (YouTube, SoundCloud, Bandcamp, direct audio URL). Up to 12 minutes are transcribed per job; for anything longer (e.g. a 30-minute lesson) set an optional **Start** / **End** time to pick the part you want. Links longer than 12 minutes need a range; long uploads without one are cut to the first 12 minutes, with a warning.
-5.  **Pick the video type**: *Song* for recordings and performances, *Tutorial* for lessons where someone talks you through it. Tutorial mode reads the video's captions (or runs local speech recognition with faster-whisper when there are none) and picks up the capo, tuning and chord names the teacher mentions. Spoken settings fill in Tuning/Capo only if you left them at Standard / No capo; your own choice always wins. *Tabs on screen* is planned.
+5.  **Pick the video type**: *Song* for recordings and performances, *Tutorial* for lessons where someone talks you through it. Tutorial mode reads the video's captions (or runs local speech recognition with faster-whisper when there are none) and picks up the capo, tuning and chord names the teacher mentions. Spoken settings fill in Tuning/Capo only if you left them at Standard / No capo; your own choice always wins. *Tabs on screen* reads the tab shown in the video (play-alongs, lessons with a tab strip): it finds the six-line staff and bar lines in sampled frames, reads the fret numbers with a small digit model trained on synthetic renders of system fonts (no labelled data, no paid services), votes across the many frames a bar stays on screen, and then gives every heard note the string and fret of the on-screen column it matches (timing still comes from the audio). Settings named in a video's title/description ("Drop D", "Capo 2") are applied in every mode when Tuning/Capo were left at the defaults.
 6.  **Isolate guitar** (on by default) separates the guitar from vocals, drums and bass first. Leave it on for full songs; turn it off for solo guitar recordings to save time.
 7.  **View Results**: the tab is laid out in 4/4 bars on a 16th-note grid; the current bar highlights during playback and clicking a bar jumps there. Slides are marked `/` (up) and `\` (down), e.g. `3/5`. Switch to **Synth** to hear the tab played by a built-in guitar synthesizer (acoustic, nylon, clean or overdriven electric), slow it down to 50-75%, loop a bar, turn on a metronome, or click any fret number to hear that note. Download it as **TXT** or **MIDI** (open the MIDI in MuseScore for standard notation).
 
@@ -96,6 +96,8 @@ npm run dev
 | Download links | yt-dlp |
 | Decode any format | ffmpeg |
 | Guitar isolation | Demucs `htdemucs_6s` |
+| Tabs on screen | OpenCV staff/bar detection (handles light-on-dark, faint lines, cursors, a real guitar in shot) + SVM digit reader trained on synthetic fonts + per-bar voting + in-order matching to the heard notes |
+| Tab check | Every finished note is re-checked against the audio (pitch evidence vs. neighbouring semitones, presence, attack, timing, detector amplitude); a logistic model fitted on GuitarSet gives each note a confidence, flags unsure notes/bars and hides near-certain ghosts |
 | Off-pitch recordings | Spectral-peak tuning estimate; recordings 20+ cents from A440 are resampled onto concert pitch before note detection |
 | Polyphonic note detection | Spotify basic-pitch |
 | Tempo / beat grid | librosa beat tracking |
@@ -128,6 +130,16 @@ The pipeline is evaluated on [GuitarSet](https://guitarset.weebly.com/) (Xi et a
 | Right pitch but a different string, of the same notes | 44.8% |
 
 For reference, basic-pitch's raw notes before they are snapped to the 16th-note grid score 79.2% onset F1. Quantising to a readable tab costs about 8 points.
+
+**Tab check (verification step)** — `benchmark_verify.py fit|tune|test` fits the per-note confidence model on the validation clips, picks the refinement threshold there, and scores the test clips once:
+
+| Metric (test set) | Result |
+|---|---|
+| Note onset F1 without / with refinement | 71.3% → **72.9%** |
+| Confidence calibration (shown → actually right) | ~44% → 52.5% · ~61% → 64.5% · ~78% → 80.5% · ~93% → 93.3% |
+| Overall score vs. real share of right notes, per clip | within 5.4 points on average |
+
+The model is fitted on clean solo guitar; on dense or lo-fi mixes it is less sure of itself and hides more notes, which is why hidden notes can be shown again in the Studio.
 
 **Limitations**
 - **basic-pitch was probably trained on GuitarSet**, so some of these recordings may have been in its training data, which would inflate the note F1. The fingering score comes from this project's own Viterbi step and is not affected. A cleaner test would use only basic-pitch's GuitarSet test split, or a dataset it never saw (e.g. IDMT-SMT-Guitar).
