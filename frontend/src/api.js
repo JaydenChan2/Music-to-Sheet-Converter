@@ -1,5 +1,18 @@
-// All requests go through the Vite dev proxy (see vite.config.js).
-const API = '/api';
+// In development requests go through the Vite proxy (see vite.config.js). In
+// production set VITE_API_URL to the backend's address, e.g.
+// https://you-guitar-tab-ai.hf.space (no trailing slash).
+export const BACKEND = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const API = `${BACKEND}/api`;
+
+// Result file links come back as /api/jobs/...; point them at the backend.
+function absolutize(job) {
+  if (job?.result?.files && BACKEND) {
+    job.result.files = Object.fromEntries(
+      Object.entries(job.result.files).map(([k, v]) => [k, v.startsWith('/') ? BACKEND + v : v]),
+    );
+  }
+  return job;
+}
 
 async function parse(response) {
   let data = null;
@@ -43,7 +56,19 @@ export async function createJobFromUrl(url, options) {
 }
 
 export async function getJob(id) {
-  return parse(await fetch(`${API}/jobs/${id}`));
+  return absolutize(await parse(await fetch(`${API}/jobs/${id}`)));
+}
+
+/** Precomputed example songs shipped with the website (see backend/make_examples.py). */
+export async function getExamples() {
+  const r = await fetch('/examples/index.json');
+  return r.ok ? r.json() : { examples: [] };
+}
+
+export async function getExample(id) {
+  const r = await fetch(`/examples/${id}/result.json`);
+  if (!r.ok) throw new Error('That example could not be loaded.');
+  return r.json();
 }
 
 export async function waitForJob(id, onUpdate, intervalMs = 800) {

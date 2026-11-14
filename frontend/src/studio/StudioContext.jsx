@@ -3,13 +3,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StudioContext } from './studio';
 import { TabSynth } from '../synth';
-import { createJobFromFile, createJobFromUrl, getHealth, waitForJob } from '../api';
+import { createJobFromFile, createJobFromUrl, getExample, getHealth, waitForJob } from '../api';
 
 
 const DEFAULT_OPTIONS = { videoType: 'song', separate: true, tuning: 'standard', capo: 0, customTuning: '' };
 const OPTIONS_KEY = 'guitar-options';
 const DEFAULT_PLAYBACK = { mode: 'original', tone: 'acoustic', speed: 1, metronome: false, volume: 0.8 };
 const PLAYBACK_KEY = 'playback-settings';
+const WAKE_TIMEOUT_MS = 4 * 60 * 1000;
 
 function loadSaved(key, defaults) {
   try {
@@ -53,20 +54,37 @@ export function StudioProvider({ children }) {
   const loop = loopBar !== null && result ? result.measures[loopBar] : null;
 
   useEffect(() => {
-    getHealth()
-      .then((h) => {
-        setBackendUp(true);
-        setSeparationAvailable(h.separation_available);
-        setSpeechAvailable(!!h.speech_available);
-        if (h.tunings) setTunings(h.tunings);
-        if (h.max_capo) setMaxCapo(h.max_capo);
-        if (h.max_duration) setMaxDuration(h.max_duration);
-      })
-      .catch(() => {
-        setBackendUp(false);
-        setError("Can't reach the backend. Start it with: cd backend && .venv/bin/python app.py");
-      });
-    return () => synth.stop();
+    // A free host may be asleep: keep trying for a few minutes while it wakes.
+    let cancelled = false;
+    const started = Date.now();
+    const connect = () => {
+      getHealth()
+        .then((h) => {
+          if (cancelled) return;
+          setBackendUp(true);
+          setError(null);
+          setSeparationAvailable(h.separation_available);
+          setSpeechAvailable(!!h.speech_available);
+          if (h.tunings) setTunings(h.tunings);
+          if (h.max_capo) setMaxCapo(h.max_capo);
+          if (h.max_duration) setMaxDuration(h.max_duration);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (Date.now() - started < WAKE_TIMEOUT_MS) {
+            setBackendUp('waking');
+            setTimeout(connect, 5000);
+          } else {
+            setBackendUp(false);
+            setError("Can't reach the transcription server right now. The examples above still work.");
+          }
+        });
+    };
+    connect();
+    return () => {
+      cancelled = true;
+      synth.stop();
+    };
   }, [synth]);
 
   const setOption = (key, value) => {
@@ -126,6 +144,33 @@ export function StudioProvider({ children }) {
     setLoopBar(null);
   };
 
+  const showResult = (res) => {
+    synth.load(res);
+    synth.onEnd = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+    setResult(res);
+    if (audioRef.current) {
+      audioRef.current.src = res.files.original;
+      audioRef.current.load();
+    }
+  };
+
+  // A precomputed example: shown instantly, no server needed.
+  const loadExample = async (example) => {
+    resetPlayback();
+    setError(null);
+    try {
+      const res = await getExample(example.id);
+      setTitle(`${example.title} (example)`);
+      showResult(res);
+      setJob({ status: 'done', video_type: example.mode, example: true });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const startJob = async (label, create, fromLink) => {
     resetPlayback();
     setTitle(label);
@@ -138,16 +183,7 @@ export function StudioProvider({ children }) {
         setJob({ ...j, from_link: fromLink });
         if (j.title) setTitle(j.title);
       });
-      synth.load(finished.result);
-      synth.onEnd = () => {
-        setIsPlaying(false);
-        setCurrentTime(0);
-      };
-      setResult(finished.result);
-      if (audioRef.current) {
-        audioRef.current.src = finished.result.files.original;
-        audioRef.current.load();
-      }
+      showResult(finished.result);
       setJob(finished);
     } catch (err) {
       console.error(err);
@@ -230,7 +266,7 @@ export function StudioProvider({ children }) {
 
   const value = {
     // job
-    title, job, result, error, setError, isProcessing, transcribeFile, transcribeUrl, reset,
+    title, job, result, error, setError, isProcessing, transcribeFile, transcribeUrl, reset, loadExample,
     // setup
     options, setOption, tunings, maxCapo, maxDuration, separationAvailable, speechAvailable, backendUp,
     // playback

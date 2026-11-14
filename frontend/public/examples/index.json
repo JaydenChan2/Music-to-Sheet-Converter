@@ -1,0 +1,41 @@
+{
+ "credit": "Audio: GuitarSet (Xi, Bittner, Pauwels, Ye & Bello, ISMIR 2018), CC BY 4.0.",
+ "examples": [
+  {
+   "id": "jazz-solo",
+   "title": "Jazz solo",
+   "mode": "song",
+   "blurb": "A single-note jazz line: melody, timing and fingering.",
+   "source": "GuitarSet 02_Jazz1-200-B_solo",
+   "notes": 41,
+   "check": 0.89
+  },
+  {
+   "id": "rock-rhythm",
+   "title": "Rock rhythm",
+   "mode": "song",
+   "blurb": "Strummed rock chords in C#: chord shapes on the grid.",
+   "source": "GuitarSet 01_Rock1-90-C#_comp",
+   "notes": 180,
+   "check": 0.84
+  },
+  {
+   "id": "guitar-lesson",
+   "title": "Guitar lesson",
+   "mode": "tutorial",
+   "blurb": "A teacher talks first: tutorial mode picks up the tuning and chords.",
+   "source": "GuitarSet 05_SS1-68-E_comp",
+   "notes": 134,
+   "check": 0.66
+  },
+  {
+   "id": "tab-video",
+   "title": "Tab video",
+   "mode": "tab",
+   "blurb": "The tab is on screen: strings and frets come from the picture.",
+   "source": "GuitarSet 03_Jazz2-110-Bb_comp",
+   "notes": 125,
+   "check": 0.9
+  }
+ ]
+}

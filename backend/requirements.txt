@@ -20,3 +20,4 @@ torchcodec
 faster-whisper  # tutorial mode: local speech recognition when a video has no captions
 opencv-python-headless  # tabs-on-screen mode: reading tab from video frames
 pillow  # renders the synthetic digits the fret-number reader is trained on
+onnxruntime  # basic-pitch's model runtime on Linux (macOS can use CoreML)

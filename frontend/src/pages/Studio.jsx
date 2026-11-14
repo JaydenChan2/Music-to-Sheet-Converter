@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { getExamples } from '../api';
 import UploadSection from '../components/UploadSection';
 import TabViewer from '../components/TabViewer';
 import PlaybackControls from '../components/PlaybackControls';
@@ -13,9 +14,40 @@ function Status() {
   if (isProcessing) return <span className="status status--busy"><i />Transcribing</span>;
   if (result) return <span className="status status--up"><i />Tab ready</span>;
   if (backendUp === null) return <span className="status"><i />Connecting</span>;
+  if (backendUp === 'waking') return <span className="status status--busy"><i />Waking up the server</span>;
   return backendUp
     ? <span className="status status--up"><i />Backend online</span>
     : <span className="status status--down"><i />Backend offline</span>;
+}
+
+const MODE_LABEL = { song: 'Song', tutorial: 'Tutorial', tab: 'Tabs on screen' };
+
+function Examples() {
+  const s = useStudio();
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    getExamples().then(setData).catch(() => setData({ examples: [] }));
+  }, []);
+  if (!data?.examples?.length) return null;
+  return (
+    <div className="examples">
+      <div className="examples__head">
+        <p className="setup__label"><b>00</b> Try an example</p>
+        <p className="setup__hint">Already transcribed, so they open instantly — one for each mode.</p>
+      </div>
+      <div className="examples__grid">
+        {data.examples.map((ex) => (
+          <button key={ex.id} className="examples__card" onClick={() => s.loadExample(ex)}>
+            <span className="examples__mode">{MODE_LABEL[ex.mode] || ex.mode}</span>
+            <span className="examples__title">{ex.title}</span>
+            <span className="examples__blurb">{ex.blurb}</span>
+            <span className="examples__meta">{ex.notes} notes · tab check {Math.round(ex.check * 100)}%</span>
+          </button>
+        ))}
+      </div>
+      <p className="examples__credit">{data.credit}</p>
+    </div>
+  );
 }
 
 function Processing() {
@@ -150,6 +182,7 @@ export default function Studio() {
 
       <section className="studio">
         <div className="wrap">
+          {!s.job && <Examples />}
           {!s.job && (
             <UploadSection
               onFileSelected={s.transcribeFile}

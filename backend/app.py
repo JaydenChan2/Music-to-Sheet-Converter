@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -19,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name
 log = logging.getLogger('app')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JOBS_DIR = os.path.join(BASE_DIR, 'jobs')
+JOBS_DIR = os.environ.get('JOBS_DIR', os.path.join(BASE_DIR, 'jobs'))
 os.makedirs(JOBS_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'mp4', 'flac', 'ogg', 'aac', 'webm', 'aiff', 'aif', 'opus', 'mov'}
@@ -27,13 +28,61 @@ SERVED_FILES = {'original.mp3', 'transcription.mid', 'tab.txt', 'tabframe.jpg'}
 VIDEO_TYPES = {'song', 'tutorial', 'tab'}
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
-CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_MB', 200)) * 1024 * 1024
+
+# Settings for hosting publicly; all off by default for local use.
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get('ALLOWED_ORIGINS', '*').split(',') if o.strip()]
+RATE_LIMIT_PER_HOUR = int(os.environ.get('RATE_LIMIT_PER_HOUR', 0))  # jobs per visitor per hour (0 = no limit)
+MAX_QUEUED = int(os.environ.get('MAX_QUEUED', 0))  # refuse new jobs while this many are waiting (0 = no limit)
+JOB_TTL_HOURS = float(os.environ.get('JOB_TTL_HOURS', 0))  # delete jobs older than this (0 = keep)
+CORS(app, origins=ALLOWED_ORIGINS)
 
 # The ML models are memory-heavy, so jobs run one at a time.
 executor = ThreadPoolExecutor(max_workers=1)
 jobs = {}
 jobs_lock = threading.Lock()
+recent_requests = {}  # visitor -> [timestamps of jobs created]
+
+
+def _visitor():
+    # behind a hosting proxy the real client is the first X-Forwarded-For entry
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return forwarded.split(',')[0].strip() or request.remote_addr or 'unknown'
+
+
+def _over_limits():
+    """An error message if this request should be turned away, else None."""
+    now = time.time()
+    if RATE_LIMIT_PER_HOUR:
+        stamps = [t for t in recent_requests.get(_visitor(), []) if now - t < 3600]
+        recent_requests[_visitor()] = stamps
+        if len(stamps) >= RATE_LIMIT_PER_HOUR:
+            return f"That's {RATE_LIMIT_PER_HOUR} songs this hour - the free server needs a break. Try the examples meanwhile."
+    if MAX_QUEUED:
+        with jobs_lock:
+            waiting = sum(1 for j in jobs.values() if j['status'] == 'running')
+        if waiting >= MAX_QUEUED:
+            return "The server is busy with other songs right now. Try again in a minute."
+    return None
+
+
+def _cleanup_loop():
+    """Delete finished jobs (and their files) older than JOB_TTL_HOURS."""
+    while True:
+        cutoff = time.time() - JOB_TTL_HOURS * 3600
+        with jobs_lock:
+            old = [k for k, j in jobs.items() if j['status'] != 'running' and j.get('_created', 0) < cutoff]
+            for k in old:
+                jobs.pop(k)
+        for name in os.listdir(JOBS_DIR):
+            path = os.path.join(JOBS_DIR, name)
+            if name not in jobs and os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        time.sleep(600)
+
+
+if JOB_TTL_HOURS:
+    threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 
 def update_job(job_id, **fields):
@@ -120,6 +169,9 @@ def health():
 
 @app.route('/api/jobs', methods=['POST'])
 def create_job():
+    refusal = _over_limits()
+    if refusal:
+        return jsonify({'error': refusal}), 429
     job_id = uuid.uuid4().hex[:12]
     job_dir = os.path.join(JOBS_DIR, job_id)
     url, source, title = None, None, None
@@ -161,7 +213,10 @@ def create_job():
             'title': title, 'separate': separate and separation_available(), 'error': None, 'result': None,
             'tuning': tuning['name'], 'capo': tuning['capo'], 'video_type': video_type,
             '_dir': job_dir, '_source': source, '_url': url, '_tuning': tuning, '_range': clip_range,
+            '_created': time.time(),
         }
+    if RATE_LIMIT_PER_HOUR:
+        recent_requests.setdefault(_visitor(), []).append(time.time())  # only accepted jobs count
     executor.submit(run_job, job_id)
     return jsonify(job_view(jobs[job_id])), 202
 

@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 SR = 22050  # basic-pitch's native sample rate
 MIX_SR = 44100  # Demucs' native sample rate
-MAX_DURATION_S = 12 * 60  # longest stretch transcribed in one job
+MAX_DURATION_S = int(os.environ.get('MAX_DURATION_S', 12 * 60))  # longest stretch transcribed in one job
 MAX_SOURCE_S = 3 * 60 * 60  # longest video/recording a range can be cut from
 
 # Standard tuning as MIDI note numbers, low E (index 0) -> high e (index 5)

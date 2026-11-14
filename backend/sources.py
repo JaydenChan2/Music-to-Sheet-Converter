@@ -5,10 +5,29 @@ from urllib.parse import urlparse
 from audio_processor import MAX_DURATION_S, MAX_SOURCE_S, ProcessingError, clock
 
 
+def _is_public(host):
+    """True if every address the host resolves to is on the public internet."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return True  # let the downloader report unknown hosts in its own words
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split('%')[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return False
+    return True
+
+
 def validate_url(url):
     parsed = urlparse(url.strip())
     if parsed.scheme not in ('http', 'https') or not parsed.netloc:
         raise ProcessingError("Please enter a valid http(s) link.")
+    # The server fetches this link, so never let it reach its own network
+    # (localhost, cloud metadata at 169.254.169.254, private ranges...).
+    if os.environ.get('ALLOW_PRIVATE_URLS') != '1' and not _is_public(parsed.hostname or ''):
+        raise ProcessingError("That link points to a private network address.")
     return url.strip()
 
 

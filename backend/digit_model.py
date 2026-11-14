@@ -20,6 +20,9 @@ from PIL import Image, ImageDraw, ImageFont
 log = logging.getLogger(__name__)
 
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.cache', 'digit_model_v2.pkl')
+# The trained, benchmarked model ships with the code (fonts differ between machines,
+# so retraining elsewhere would give a different, untested model).
+BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', 'digit_model_v2.pkl.gz')
 CLASSES = list('0123456789x') + ['other']
 # letters/symbols seen on tab staves; lookalikes of digits (o, b, g, q, l, |) are left out
 OTHER_CHARS = list('hprstvwTAPMHNaecmnu()/\\~.-=*>^<+?') + ['//', '~~', 'PM', 'h', 'p']
@@ -136,6 +139,10 @@ def get_model():
     if _model is None:
         if os.path.exists(CACHE):
             with open(CACHE, 'rb') as f:
+                _model = pickle.load(f)
+        elif os.path.exists(BUNDLED):
+            import gzip
+            with gzip.open(BUNDLED, 'rb') as f:
                 _model = pickle.load(f)
         else:
             _model, _ = train()

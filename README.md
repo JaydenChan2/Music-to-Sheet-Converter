@@ -79,6 +79,12 @@ npm run dev
 
 ---
 
+## 🌐 Deploying
+
+Free setup: website on **Vercel**, transcription server on **Hugging Face Spaces** (Docker). Step-by-step guide: [deploy/DEPLOY.md](deploy/DEPLOY.md).
+
+---
+
 ## 📖 Usage
 
 1.  **Start Services**: backend via `.venv/bin/python app.py`, frontend via `npm run dev`.
