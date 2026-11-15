@@ -4,6 +4,18 @@ from urllib.parse import urlparse
 
 from audio_processor import MAX_DURATION_S, MAX_SOURCE_S, ProcessingError, clock
 
+BOT_BLOCK_MESSAGE = (
+    "YouTube blocks downloads from cloud servers, so YouTube links don't work "
+    "on the hosted version. Download the audio and upload the file instead, "
+    "or try a SoundCloud, Bandcamp or direct audio link."
+)
+
+
+def _is_bot_block(msg):
+    """True if yt-dlp failed because the site wants a login / bot check (YouTube on cloud IPs)."""
+    lowered = msg.lower()
+    return 'not a bot' in lowered or 'sign in to confirm' in lowered or '--cookies' in lowered
+
 
 def _is_public(host):
     """True if every address the host resolves to is on the public internet."""
@@ -67,6 +79,8 @@ def download_audio(url, dest_dir, has_range=False):
             path = ydl.prepare_filename(info)
     except yt_dlp.utils.DownloadError as e:
         msg = str(e).replace('ERROR: ', '')
+        if _is_bot_block(msg):
+            raise ProcessingError(BOT_BLOCK_MESSAGE)
         raise ProcessingError(f"Couldn't download that link: {msg[:300]}")
 
     if not os.path.exists(path):
@@ -95,7 +109,10 @@ def download_video(url, dest_dir):
             info = ydl.extract_info(url, download=True)
             path = ydl.prepare_filename(info)
     except yt_dlp.utils.DownloadError as e:
-        raise ProcessingError(f"Couldn't download the video picture: {str(e).replace('ERROR: ', '')[:300]}")
+        msg = str(e).replace('ERROR: ', '')
+        if _is_bot_block(msg):
+            raise ProcessingError(BOT_BLOCK_MESSAGE)
+        raise ProcessingError(f"Couldn't download the video picture: {msg[:300]}")
     return path if os.path.exists(path) else None
 
 
