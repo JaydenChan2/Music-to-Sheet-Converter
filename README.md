@@ -1,4 +1,4 @@
-# 🎸 Guitar Tab AI
+# 🎸 Music to Sheet Converter
 
 > **Turn a recording, a song link, or a video into guitar tab you can read, hear and download.**
 
