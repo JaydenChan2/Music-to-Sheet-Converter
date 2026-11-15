@@ -270,7 +270,7 @@ const UploadSection = ({ onFileSelected, onUrlSubmitted, options, onOptionChange
                             className="input"
                             value={url}
                             onChange={(e) => setUrl(e.target.value)}
-                            placeholder="YouTube, SoundCloud, Bandcamp or a direct audio URL"
+                            placeholder="SoundCloud, Bandcamp or a direct audio URL"
                         />
                     </label>
                     <button type="submit" className="btn btn--solid btn--sm" disabled={!url.trim()}>
